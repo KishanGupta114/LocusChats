@@ -1,10 +1,20 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Safe access to environment variables in browser
+const getApiKey = () => {
+  try {
+    return process.env.API_KEY || '';
+  } catch (e) {
+    return '';
+  }
+};
+
+const apiKey = getApiKey();
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 export const moderateContent = async (text: string): Promise<{ safe: boolean; reason?: string }> => {
-  if (!process.env.API_KEY) return { safe: true };
+  if (!ai) return { safe: true };
 
   try {
     const response = await ai.models.generateContent({
@@ -31,7 +41,7 @@ export const moderateContent = async (text: string): Promise<{ safe: boolean; re
 };
 
 export const getPrivacyAdvice = async (): Promise<string> => {
-    if (!process.env.API_KEY) return "Stay safe and don't share personal info.";
+    if (!ai) return "Stay safe and don't share personal info.";
 
     try {
         const response = await ai.models.generateContent({
