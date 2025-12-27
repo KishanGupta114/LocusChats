@@ -29,20 +29,19 @@ const App: React.FC = () => {
     stateRef.current = state;
   }, [state]);
 
-  // Unified Visual Viewport Management for Mobile Keyboards
+  // Robust Viewport Management for Mobile Keyboards
   useEffect(() => {
     const handleViewport = () => {
       const vv = window.visualViewport;
       if (!vv || !appRef.current) return;
       
-      // We set the height to exactly the visible area height
+      // Calculate height based on visual viewport to account for keyboard
       appRef.current.style.height = `${vv.height}px`;
       
-      // On some mobile browsers, the keyboard "shifts" the whole window. 
-      // We counteract that shift by translating the app container to stay at the visible top.
+      // Offset translation is critical for iOS to prevent the "scroll into void" effect
       appRef.current.style.transform = `translateY(${vv.offsetTop}px)`;
 
-      // Force scroll reset on the window to prevent "phantom" scroll space
+      // Force window scroll position to 0 to stop browser auto-shifting
       if (vv.offsetTop > 0 || window.scrollY > 0) {
         window.scrollTo(0, 0);
       }
@@ -51,7 +50,6 @@ const App: React.FC = () => {
     window.visualViewport?.addEventListener('resize', handleViewport);
     window.visualViewport?.addEventListener('scroll', handleViewport);
     
-    // Initial call
     handleViewport();
 
     return () => {

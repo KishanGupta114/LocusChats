@@ -19,6 +19,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeTypingList = Object.keys(typingUsers).filter(u => u !== currentUser?.username);
+  const hasText = input.trim().length > 0;
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     if (scrollRef.current) {
@@ -169,37 +170,40 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               disabled={isModerating}
               autoComplete="off"
               autoCorrect="off"
+              spellCheck="false"
               className="w-full bg-transparent px-4 py-3 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[128px] block leading-snug appearance-none"
               style={{ height: 'auto' }}
             />
           </div>
           
-          <button 
-            type="submit"
-            disabled={!input.trim() || isModerating}
-            className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl flex-none ${
-              input.trim() || isModerating
-                ? 'bg-white text-black opacity-100' 
-                : 'bg-white/5 text-gray-700 opacity-50 pointer-events-none'
-            } ${justSent ? 'bg-green-500 scale-105 animate-send-success' : 'active:scale-90'}`}
-          >
-            {isModerating ? (
-              <div className="w-5 h-5 border-[3px] border-black/10 border-t-black rounded-full animate-spin"></div>
-            ) : justSent ? (
-              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-              </svg>
-            ) : (
-              <svg 
-                className={`w-6 h-6 transition-transform duration-300 ${input.trim() ? 'translate-x-0.5 -translate-y-0.5' : 'rotate-45'}`} 
-                fill="none" 
-                viewBox="0 0 24 24" 
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
-            )}
-          </button>
+          <div className="flex-none flex items-center justify-center w-12 h-12">
+            <button 
+              type="submit"
+              disabled={!hasText || isModerating}
+              className={`w-full h-full rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
+                hasText || isModerating
+                  ? 'bg-white text-black opacity-100 scale-100' 
+                  : 'bg-white/5 text-gray-700 opacity-0 scale-50 pointer-events-none'
+              } ${justSent ? 'bg-green-500 scale-110' : 'active:scale-90'} ${hasText ? 'animate-send-pop' : ''}`}
+            >
+              {isModerating ? (
+                <div className="w-5 h-5 border-[3px] border-black/10 border-t-black rounded-full animate-spin"></div>
+              ) : justSent ? (
+                <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg 
+                  className={`w-6 h-6 transition-transform duration-300 ${hasText ? 'translate-x-0.5 -translate-y-0.5' : 'rotate-45'}`} 
+                  fill="none" 
+                  viewBox="0 0 24 24" 
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              )}
+            </button>
+          </div>
         </form>
         
         <div className="mt-2 flex items-center justify-center gap-6 opacity-30 select-none">
