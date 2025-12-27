@@ -34,31 +34,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     scrollToBottom();
   }, [messages, activeTypingList.length]);
 
-  useEffect(() => {
-    const handleResize = () => {
-      // Keep chat scrolled to bottom when keyboard toggles
-      setTimeout(() => scrollToBottom('auto'), 50);
-    };
-    window.visualViewport?.addEventListener('resize', handleResize);
-    return () => window.visualViewport?.removeEventListener('resize', handleResize);
-  }, []);
-
   const adjustTextareaHeight = () => {
     const textarea = textAreaRef.current;
     if (textarea) {
-      // Reset height to correctly calculate scrollHeight
       textarea.style.height = 'auto';
-      // Limit to 128px (~5-6 lines)
       const newHeight = Math.min(textarea.scrollHeight, 128);
       textarea.style.height = `${newHeight}px`;
-      
-      // Prevent browser from trying to scroll the page instead of just the textarea
-      if (newHeight >= 128) {
-        textarea.style.overflowY = 'auto';
-      } else {
-        textarea.style.overflowY = 'hidden';
-      }
-      
+      textarea.style.overflowY = newHeight >= 128 ? 'auto' : 'hidden';
       scrollToBottom('auto');
     }
   };
@@ -80,7 +62,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       if (textAreaRef.current) {
         textAreaRef.current.style.height = 'auto';
         textAreaRef.current.style.overflowY = 'hidden';
-        // We don't call focus() if it might trigger a zoom, but at 16px it's safe
         textAreaRef.current.focus(); 
       }
       
@@ -131,8 +112,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               <div 
                 className={`min-w-[40px] max-w-[88%] px-4 py-3 rounded-2xl text-[15px] leading-relaxed break-words shadow-2xl transition-all ${
                   isMe 
-                    ? 'bubble-me rounded-tr-none origin-right' 
-                    : 'bubble-them text-gray-200 rounded-tl-none origin-left'
+                    ? 'bubble-me rounded-tr-none' 
+                    : 'bubble-them text-gray-200 rounded-tl-none'
                 }`}
               >
                 {msg.text}
@@ -141,7 +122,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           );
         })}
         
-        {/* Typing Indicator */}
         {activeTypingList.length > 0 && (
           <div className="flex items-start animate-message">
             <div className="flex flex-col items-start">
@@ -158,18 +138,16 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
             </div>
           </div>
         )}
-
-        <div className="h-6"></div>
+        <div className="h-4"></div>
       </div>
 
-      {/* Stable Input Area */}
-      <div className="shrink-0 px-4 py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1.25rem,env(safe-area-inset-bottom, 1.25rem))]">
+      {/* Input Area */}
+      <div className="shrink-0 px-4 py-3 sm:py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1rem,env(safe-area-inset-bottom, 1rem))]">
         <form 
           onSubmit={handleSubmit} 
           className="relative max-w-4xl mx-auto flex items-end gap-3"
-          style={{ touchAction: 'none' }} 
         >
-          <div className="flex-1 min-h-[48px] bg-white/[0.04] border border-white/10 rounded-2xl focus-within:border-white/30 focus-within:bg-white/[0.06] transition-all flex items-center overflow-hidden">
+          <div className="flex-1 min-h-[48px] bg-white/[0.04] border border-white/10 rounded-2xl focus-within:border-white/30 transition-all flex items-center overflow-hidden">
             <textarea 
               ref={textAreaRef}
               rows={1}
@@ -191,21 +169,19 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               disabled={isModerating}
               autoComplete="off"
               autoCorrect="off"
-              autoCapitalize="sentences"
               className="w-full bg-transparent px-4 py-3 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[128px] block leading-snug appearance-none"
-              style={{ height: 'auto', outline: 'none' }}
+              style={{ height: 'auto' }}
             />
           </div>
           
           <button 
             type="submit"
             disabled={!input.trim() || isModerating}
-            className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
+            className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl flex-none ${
               input.trim() || isModerating
-                ? 'bg-white text-black scale-100 opacity-100 animate-send-success' 
-                : 'bg-white/5 text-gray-700 scale-95 opacity-50 pointer-events-none'
-            } ${justSent ? 'bg-green-500 scale-105' : 'active:scale-90'}`}
-            title="Send Message"
+                ? 'bg-white text-black opacity-100' 
+                : 'bg-white/5 text-gray-700 opacity-50 pointer-events-none'
+            } ${justSent ? 'bg-green-500 scale-105 animate-send-success' : 'active:scale-90'}`}
           >
             {isModerating ? (
               <div className="w-5 h-5 border-[3px] border-black/10 border-t-black rounded-full animate-spin"></div>
@@ -215,7 +191,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               </svg>
             ) : (
               <svg 
-                className={`w-6 h-6 transition-transform duration-300 ${input.trim() ? 'translate-x-0.5 -translate-y-0.5 rotate-0' : 'rotate-45'}`} 
+                className={`w-6 h-6 transition-transform duration-300 ${input.trim() ? 'translate-x-0.5 -translate-y-0.5' : 'rotate-45'}`} 
                 fill="none" 
                 viewBox="0 0 24 24" 
                 stroke="currentColor"
@@ -226,15 +202,9 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           </button>
         </form>
         
-        <div className="mt-3 flex items-center justify-center gap-6 opacity-30 select-none">
-            <div className="flex items-center gap-1.5">
-              <div className="w-1 h-1 rounded-full bg-green-500"></div>
-              <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Encrypted</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-1 h-1 rounded-full bg-blue-500"></div>
-              <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Anonymous</span>
-            </div>
+        <div className="mt-2 flex items-center justify-center gap-6 opacity-30 select-none">
+            <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Memory Only</span>
+            <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Anonymous</span>
         </div>
       </div>
     </div>

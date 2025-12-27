@@ -3,29 +3,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
   <title>Locus Chat | Ephemeral Presence</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
     
     :root {
+      /* Fallback for browsers not supporting dvh */
       --app-height: 100%;
     }
 
     html, body {
       height: 100%;
-      height: -webkit-fill-available;
+      height: 100dvh;
+      width: 100%;
       margin: 0;
       padding: 0;
       overflow: hidden;
-      position: fixed; /* Strictly lock background */
-      width: 100%;
+      position: fixed;
       background-color: #0a0a0a;
-      /* Prevent all system gestures except single finger scroll in permitted areas */
-      touch-action: none; 
-      -webkit-user-select: none;
-      user-select: none;
+      -webkit-text-size-adjust: 100%;
     }
 
     #root {
@@ -41,19 +39,17 @@
     body {
       font-family: 'Inter', sans-serif;
       color: #e5e7eb;
-      overscroll-behavior: none;
       -webkit-font-smoothing: antialiased;
     }
 
     .mono { font-family: 'JetBrains Mono', monospace; }
     
     .glass {
-      background: rgba(13, 13, 13, 0.96);
-      backdrop-filter: blur(28px);
-      -webkit-backdrop-filter: blur(28px);
+      background: rgba(13, 13, 13, 0.98);
+      backdrop-filter: blur(30px);
+      -webkit-backdrop-filter: blur(30px);
     }
 
-    /* Message bubbles */
     .bubble-me {
       background: #ffffff;
       color: #000000;
@@ -64,38 +60,29 @@
     .bubble-them {
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid rgba(255, 255, 255, 0.12);
-      font-weight: 400;
     }
 
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-    /* CRITICAL: Fix for iOS Safari input zoom and stability */
+    /* Fix for iOS Safari input zoom and stability */
     input, textarea {
-      font-size: 16px !important; /* Must be at least 16px to prevent iOS auto-zoom */
+      font-size: 16px !important; 
       -webkit-user-select: text;
       user-select: text;
     }
 
-    @keyframes pulse-slow {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.6; transform: scale(0.98); }
-    }
-    .animate-pulse-slow {
-      animation: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-
     @keyframes message-pop {
-      0% { transform: scale(0.95) translateY(10px); opacity: 0; }
+      0% { transform: scale(0.96) translateY(8px); opacity: 0; }
       100% { transform: scale(1) translateY(0); opacity: 1; }
     }
     .animate-message {
-      animation: message-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+      animation: message-pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
     }
 
     @keyframes send-success {
       0% { transform: scale(1); }
-      50% { transform: scale(1.1); filter: brightness(1.2); }
+      50% { transform: scale(1.1); }
       100% { transform: scale(1); }
     }
     .animate-send-success {

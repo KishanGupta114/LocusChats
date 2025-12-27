@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
 import { AppState, Zone, User, Message } from './types';
-import { RADIUS_KM, SESSION_DURATION_MS, LOCATION_CHECK_INTERVAL_MS, ADJECTIVES, NOUNS, COLORS } from './constants';
+import { RADIUS_KM, SESSION_DURATION_MS, ADJECTIVES, NOUNS, COLORS } from './constants';
 import { calculateDistance, getCurrentPosition } from './utils/location';
 import JoinScreen from './components/JoinScreen';
 import ChatRoom from './components/ChatRoom';
@@ -29,22 +29,29 @@ const App: React.FC = () => {
     stateRef.current = state;
   }, [state]);
 
-  // Unified Visual Viewport Management
+  // Unified Visual Viewport Management for Mobile Keyboards
   useEffect(() => {
     const handleViewport = () => {
-      if (appRef.current && window.visualViewport) {
-        const height = window.visualViewport.height;
-        appRef.current.style.height = `${height}px`;
-        
-        if (document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'INPUT') {
-          window.scrollTo(0, 0);
-          document.body.scrollTop = 0;
-        }
+      const vv = window.visualViewport;
+      if (!vv || !appRef.current) return;
+      
+      // We set the height to exactly the visible area height
+      appRef.current.style.height = `${vv.height}px`;
+      
+      // On some mobile browsers, the keyboard "shifts" the whole window. 
+      // We counteract that shift by translating the app container to stay at the visible top.
+      appRef.current.style.transform = `translateY(${vv.offsetTop}px)`;
+
+      // Force scroll reset on the window to prevent "phantom" scroll space
+      if (vv.offsetTop > 0 || window.scrollY > 0) {
+        window.scrollTo(0, 0);
       }
     };
 
     window.visualViewport?.addEventListener('resize', handleViewport);
     window.visualViewport?.addEventListener('scroll', handleViewport);
+    
+    // Initial call
     handleViewport();
 
     return () => {
@@ -57,14 +64,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      const anyStale = Object.values(stateRef.current.typingUsers).some(t => now - t > 3500);
+      const anyStale = Object.values(stateRef.current.typingUsers).some(t => now - (t as number) > 3500);
       
       if (anyStale) {
         setState(prev => {
           const newTyping = { ...prev.typingUsers };
           let changed = false;
           for (const [user, time] of Object.entries(newTyping)) {
-            if (now - time > 3500) {
+            if (now - (time as number) > 3500) {
               delete newTyping[user];
               changed = true;
             }
@@ -115,15 +122,11 @@ const App: React.FC = () => {
               }
             }));
           } else {
-            // Standard message or old format compatibility
             const msg = data.type === 'message' ? data.payload : data;
             setState(prev => {
               if (prev.messages.some(m => m.id === msg.id)) return prev;
-              
-              // Clear typing indicator for this user when they send a message
               const newTyping = { ...prev.typingUsers };
               delete newTyping[msg.sender];
-              
               return {
                 ...prev,
                 messages: [...prev.messages, msg],
@@ -236,8 +239,6 @@ const App: React.FC = () => {
 
   const broadcastTyping = () => {
     if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
-    
-    // Throttle typing updates locally
     if (typingTimeoutRef.current) return;
     
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
@@ -255,8 +256,7 @@ const App: React.FC = () => {
   return (
     <div 
       ref={appRef}
-      className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden"
-      style={{ touchAction: 'none' }}
+      className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden will-change-transform"
     >
       <Header 
         zone={state.currentZone} 
@@ -287,12 +287,12 @@ const App: React.FC = () => {
             </svg>
           </div>
           <h2 className="text-3xl font-bold mb-4">Signal Lost</h2>
-          <p className="text-gray-400 mb-8 leading-relaxed max-w-xs">You have moved beyond the 2km secure radius. This session has been wiped for your security.</p>
+          <p className="text-gray-400 mb-8 leading-relaxed max-w-xs">You have moved beyond the 2km secure radius. This session has been wiped.</p>
           <button 
             onClick={handleExit}
             className="w-full max-w-[240px] px-8 py-4 bg-white text-black font-black rounded-full hover:bg-gray-200 transition active:scale-95 uppercase tracking-widest text-xs"
           >
-            Acknowledge Purge
+            Purge Session
           </button>
         </div>
       )}
