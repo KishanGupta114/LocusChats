@@ -31,15 +31,24 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleViewport = () => {
       if (appRef.current && window.visualViewport) {
-        // Force the app height to the visible viewport (handles keyboards)
-        appRef.current.style.height = `${window.visualViewport.height}px`;
-        // Handle scroll offset that Safari occasionally adds
-        window.scrollTo(0, 0);
+        // Set height to exactly the visual viewport height
+        // This is crucial for mobile keyboards
+        const height = window.visualViewport.height;
+        appRef.current.style.height = `${height}px`;
+        
+        // On iOS, focus on input sometimes offsets the window
+        // Force it back to 0,0
+        if (document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'INPUT') {
+          window.scrollTo(0, 0);
+          document.body.scrollTop = 0;
+        }
       }
     };
 
     window.visualViewport?.addEventListener('resize', handleViewport);
     window.visualViewport?.addEventListener('scroll', handleViewport);
+    
+    // Initial call
     handleViewport();
 
     return () => {
@@ -258,6 +267,7 @@ const App: React.FC = () => {
     <div 
       ref={appRef}
       className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden"
+      style={{ touchAction: 'none' }}
     >
       <Header 
         zone={state.currentZone} 

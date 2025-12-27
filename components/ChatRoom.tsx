@@ -25,14 +25,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
   };
 
   useEffect(() => {
-    // Immediate scroll on new messages
     scrollToBottom();
   }, [messages]);
 
   useEffect(() => {
     const handleResize = () => {
-      // Delay slightly for iOS keyboard animation
-      setTimeout(scrollToBottom, 150);
+      setTimeout(scrollToBottom, 50);
     };
 
     window.visualViewport?.addEventListener('resize', handleResize);
@@ -51,7 +49,10 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
     if (check.safe) {
       onSendMessage(text);
       setInput('');
-      if (textAreaRef.current) textAreaRef.current.style.height = 'auto';
+      if (textAreaRef.current) {
+        textAreaRef.current.style.height = 'auto';
+        textAreaRef.current.focus();
+      }
       setTimeout(scrollToBottom, 50);
     } else {
       alert(`Message blocked: ${check.reason || 'Harmful content detected'}`);
@@ -64,6 +65,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
       <div 
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-6 no-scrollbar"
+        style={{ touchAction: 'pan-y' }} // Allows vertical scrolling of messages but stops other gestures
       >
         {messages.map((msg, idx) => {
           const isMe = msg.sender === currentUser?.username;
@@ -106,17 +108,16 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
             </div>
           );
         })}
-        {/* Extra bottom padding inside list */}
         <div className="h-4"></div>
       </div>
 
-      {/* Modern Compact Input Area */}
-      <div className="px-4 py-3 sm:py-4 border-t border-white/5 bg-[#0d0d0d]/80 backdrop-blur-xl pb-[max(1rem,env(safe-area-inset-bottom, 1rem))]">
+      {/* Input Area - Fixed at bottom of visible viewport */}
+      <div className="shrink-0 px-4 py-3 sm:py-4 border-t border-white/5 glass pb-[max(0.75rem,env(safe-area-inset-bottom, 0.75rem))]">
         <form 
           onSubmit={handleSubmit} 
           className="relative max-w-4xl mx-auto flex items-end gap-3"
         >
-          <div className="flex-1 min-h-[46px] relative bg-white/[0.03] border border-white/10 rounded-2xl overflow-hidden focus-within:border-white/30 transition-all">
+          <div className="flex-1 min-h-[46px] relative bg-white/[0.04] border border-white/10 rounded-2xl overflow-hidden focus-within:border-white/30 transition-all">
             <textarea 
               ref={textAreaRef}
               rows={1}
@@ -128,30 +129,30 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
                   handleSubmit(e);
                 }
               }}
-              placeholder={isModerating ? "Moderating..." : "Type a message..."}
+              placeholder={isModerating ? "Checking..." : "Message zone..."}
               disabled={isModerating}
-              className="w-full bg-transparent px-4 py-3 pr-12 focus:outline-none transition placeholder:text-gray-600 text-[15px] resize-none max-h-32 block leading-snug"
+              className="w-full bg-transparent px-4 py-3 pr-12 focus:outline-none transition placeholder:text-gray-600 text-[16px] resize-none max-h-32 block leading-snug"
               style={{ height: 'auto' }}
               onInput={(e) => {
                 const target = e.target as HTMLTextAreaElement;
                 target.style.height = 'auto';
                 target.style.height = `${target.scrollHeight}px`;
+                scrollToBottom();
               }}
             />
-            {/* Submit Icon inside input for small screens */}
             <button 
               type="submit"
               disabled={!input.trim() || isModerating}
               className="absolute right-2 bottom-1.5 p-2 text-white disabled:opacity-20 transition active:scale-90"
             >
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
               </svg>
             </button>
           </div>
         </form>
-        <div className="mt-3 text-center opacity-40 select-none">
-            <span className="text-[9px] text-gray-400 mono uppercase tracking-[0.2em] font-bold">Privacy Guaranteed • Ephemeral Only</span>
+        <div className="mt-2 text-center opacity-40 select-none">
+            <span className="text-[9px] text-gray-500 mono uppercase tracking-[0.2em] font-bold">Encrypted • Anonymous • No History</span>
         </div>
       </div>
     </div>
