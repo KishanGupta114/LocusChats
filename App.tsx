@@ -16,11 +16,13 @@ const App: React.FC = () => {
     isInRange: true,
     distance: null,
     timeLeft: SESSION_DURATION_MS,
+    typingUsers: {},
   });
 
   const [invitedZone, setInvitedZone] = useState<Zone | null>(null);
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
+  const typingTimeoutRef = useRef<any>(null);
   const appRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
@@ -31,13 +33,9 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleViewport = () => {
       if (appRef.current && window.visualViewport) {
-        // Set height to exactly the visual viewport height
-        // This is crucial for mobile keyboards
         const height = window.visualViewport.height;
         appRef.current.style.height = `${height}px`;
         
-        // On iOS, focus on input sometimes offsets the window
-        // Force it back to 0,0
         if (document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'INPUT') {
           window.scrollTo(0, 0);
           document.body.scrollTop = 0;
@@ -47,8 +45,6 @@ const App: React.FC = () => {
 
     window.visualViewport?.addEventListener('resize', handleViewport);
     window.visualViewport?.addEventListener('scroll', handleViewport);
-    
-    // Initial call
     handleViewport();
 
     return () => {
@@ -57,34 +53,28 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Parse URL on mount
+  // Cleanup stale typing indicators
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const zParam = params.get('z');
-    if (zParam) {
-      try {
-        const decodedString = atob(zParam);
-        const [id, lat, lng, expiry] = decodedString.split('|');
-        
-        if (id && lat && lng && expiry) {
-          const zone: Zone = {
-            id: id,
-            center: { lat: parseFloat(lat), lng: parseFloat(lng) },
-            createdAt: parseInt(expiry) - SESSION_DURATION_MS,
-            expiresAt: parseInt(expiry)
-          };
-          
-          if (Date.now() > zone.expiresAt) {
-            alert("This shared zone has already expired.");
-            window.history.replaceState({}, '', window.location.pathname);
-          } else {
-            setInvitedZone(zone);
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const anyStale = Object.values(stateRef.current.typingUsers).some(t => now - t > 3500);
+      
+      if (anyStale) {
+        setState(prev => {
+          const newTyping = { ...prev.typingUsers };
+          let changed = false;
+          for (const [user, time] of Object.entries(newTyping)) {
+            if (now - time > 3500) {
+              delete newTyping[user];
+              changed = true;
+            }
           }
-        }
-      } catch (e) {
-        console.error("Failed to parse shared zone", e);
+          return changed ? { ...prev, typingUsers: newTyping } : prev;
+        });
       }
-    }
+    }, 1000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // MQTT Connection Management
@@ -113,16 +103,36 @@ const App: React.FC = () => {
     client.on('message', (t, payload) => {
       if (t === topic) {
         try {
-          const msg = JSON.parse(payload.toString());
-          setState(prev => {
-            if (prev.messages.some(m => m.id === msg.id)) return prev;
-            return {
+          const data = JSON.parse(payload.toString());
+          
+          if (data.type === 'typing') {
+            if (data.sender === stateRef.current.currentUser?.username) return;
+            setState(prev => ({
               ...prev,
-              messages: [...prev.messages, msg]
-            };
-          });
+              typingUsers: {
+                ...prev.typingUsers,
+                [data.sender]: Date.now()
+              }
+            }));
+          } else {
+            // Standard message or old format compatibility
+            const msg = data.type === 'message' ? data.payload : data;
+            setState(prev => {
+              if (prev.messages.some(m => m.id === msg.id)) return prev;
+              
+              // Clear typing indicator for this user when they send a message
+              const newTyping = { ...prev.typingUsers };
+              delete newTyping[msg.sender];
+              
+              return {
+                ...prev,
+                messages: [...prev.messages, msg],
+                typingUsers: newTyping
+              };
+            });
+          }
         } catch (e) {
-          console.error("Failed to parse incoming message", e);
+          console.error("Failed to parse incoming payload", e);
         }
       }
     });
@@ -130,47 +140,6 @@ const App: React.FC = () => {
     mqttClientRef.current = client;
     return () => client.end();
   }, [state.currentZone?.id]);
-
-  // Handle Zone Expiration
-  useEffect(() => {
-    if (!state.currentZone) return;
-
-    const timer = setInterval(() => {
-      const now = Date.now();
-      const remaining = Math.max(0, state.currentZone!.expiresAt - now);
-      setState(prev => ({ ...prev, timeLeft: remaining }));
-      if (remaining <= 0) handleExit();
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [state.currentZone]);
-
-  // Handle Location Monitoring
-  useEffect(() => {
-    const checkLocation = async () => {
-      if (!stateRef.current.currentZone) return;
-
-      try {
-        const pos = await getCurrentPosition();
-        const dist = calculateDistance(
-          pos.coords.latitude,
-          pos.coords.longitude,
-          stateRef.current.currentZone.center.lat,
-          stateRef.current.currentZone.center.lng
-        );
-
-        const inRange = dist <= RADIUS_KM;
-        setState(prev => ({ ...prev, isInRange: inRange, distance: dist }));
-
-        if (!inRange) handleExit();
-      } catch (error) {
-        console.error("Location error:", error);
-      }
-    };
-
-    const interval = setInterval(checkLocation, LOCATION_CHECK_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, []);
 
   const handleJoin = async () => {
     try {
@@ -226,7 +195,8 @@ const App: React.FC = () => {
         }],
         timeLeft: zoneToUse.expiresAt - now,
         isInRange: true,
-        distance: dist
+        distance: dist,
+        typingUsers: {}
       }));
 
       setInvitedZone(null);
@@ -245,6 +215,7 @@ const App: React.FC = () => {
       isInRange: true,
       distance: null,
       timeLeft: 0,
+      typingUsers: {},
     });
     setInvitedZone(null);
   };
@@ -260,7 +231,25 @@ const App: React.FC = () => {
     };
 
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
-    mqttClientRef.current.publish(topic, JSON.stringify(msg));
+    mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }));
+  };
+
+  const broadcastTyping = () => {
+    if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
+    
+    // Throttle typing updates locally
+    if (typingTimeoutRef.current) return;
+    
+    const topic = `locuschat/v1/zones/${state.currentZone.id}`;
+    mqttClientRef.current.publish(topic, JSON.stringify({ 
+      type: 'typing', 
+      sender: state.currentUser.username,
+      timestamp: Date.now()
+    }));
+
+    typingTimeoutRef.current = setTimeout(() => {
+      typingTimeoutRef.current = null;
+    }, 2000);
   };
 
   return (
@@ -283,7 +272,9 @@ const App: React.FC = () => {
           <ChatRoom 
             messages={state.messages} 
             currentUser={state.currentUser} 
+            typingUsers={state.typingUsers}
             onSendMessage={sendMessage}
+            onTyping={broadcastTyping}
           />
         )}
       </main>

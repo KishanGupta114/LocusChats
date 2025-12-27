@@ -6,39 +6,56 @@ import { moderateContent } from '../services/geminiService';
 interface ChatRoomProps {
   messages: Message[];
   currentUser: User | null;
+  typingUsers: Record<string, number>;
   onSendMessage: (text: string) => void;
+  onTyping: () => void;
 }
 
-const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessage }) => {
+const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers, onSendMessage, onTyping }) => {
   const [input, setInput] = useState('');
   const [isModerating, setIsModerating] = useState(false);
+  const [justSent, setJustSent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
-  const scrollToBottom = () => {
+  const activeTypingList = Object.keys(typingUsers).filter(u => u !== currentUser?.username);
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     if (scrollRef.current) {
+      const scrollHeight = scrollRef.current.scrollHeight;
       scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: 'smooth'
+        top: scrollHeight,
+        behavior
       });
     }
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, activeTypingList.length]);
 
+  // Handle visual viewport resizing (keyboard appearance)
   useEffect(() => {
     const handleResize = () => {
-      setTimeout(scrollToBottom, 50);
+      setTimeout(() => scrollToBottom('auto'), 100);
     };
 
     window.visualViewport?.addEventListener('resize', handleResize);
     return () => window.visualViewport?.removeEventListener('resize', handleResize);
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const adjustTextareaHeight = () => {
+    const textarea = textAreaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      const newHeight = Math.min(textarea.scrollHeight, 140); 
+      textarea.style.height = `${newHeight}px`;
+      scrollToBottom('auto');
+    }
+  };
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     const text = input.trim();
     if (!text || isModerating) return;
 
@@ -49,11 +66,15 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
     if (check.safe) {
       onSendMessage(text);
       setInput('');
+      setJustSent(true);
+      
       if (textAreaRef.current) {
         textAreaRef.current.style.height = 'auto';
         textAreaRef.current.focus();
       }
-      setTimeout(scrollToBottom, 50);
+      
+      setTimeout(() => setJustSent(false), 500);
+      setTimeout(() => scrollToBottom('smooth'), 50);
     } else {
       alert(`Message blocked: ${check.reason || 'Harmful content detected'}`);
     }
@@ -64,8 +85,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
       {/* Message Area */}
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-6 no-scrollbar"
-        style={{ touchAction: 'pan-y' }} // Allows vertical scrolling of messages but stops other gestures
+        className="flex-1 overflow-y-auto px-4 py-4 sm:px-8 space-y-6 no-scrollbar"
+        style={{ touchAction: 'pan-y' }}
       >
         {messages.map((msg, idx) => {
           const isMe = msg.sender === currentUser?.username;
@@ -74,7 +95,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
           if (msg.isSystem) {
             return (
               <div key={msg.id} className="flex justify-center my-6">
-                <span className="text-[10px] mono uppercase tracking-[0.2em] text-gray-500 bg-white/5 px-4 py-1.5 rounded-full border border-white/5 font-medium">
+                <span className="text-[10px] mono uppercase tracking-[0.25em] text-gray-500 bg-white/5 px-4 py-1.5 rounded-full border border-white/5 font-semibold">
                   {msg.text}
                 </span>
               </div>
@@ -84,23 +105,23 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
           return (
             <div 
               key={msg.id} 
-              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}
+              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-in fade-in zoom-in-95 slide-in-from-bottom-3 duration-500 ease-out`}
             >
               {showSender && (
-                <div className={`flex items-baseline gap-2 mb-1.5 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
+                <div className={`flex items-baseline gap-2 mb-2 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
                   <span className={`text-[10px] font-black uppercase tracking-wider ${isMe ? 'text-white' : 'text-gray-500'}`}>
                     {msg.sender}
                   </span>
-                  <span className="text-[9px] text-gray-700 font-medium">
+                  <span className="text-[9px] text-gray-700 font-bold mono">
                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
               )}
               <div 
-                className={`min-w-[40px] max-w-[82%] px-4 py-2.5 rounded-2xl text-[14px] leading-relaxed break-words shadow-lg ${
+                className={`min-w-[40px] max-w-[88%] px-4 py-3 rounded-2xl text-[15px] leading-relaxed break-words shadow-2xl transform transition-transform ${
                   isMe 
-                    ? 'bubble-me rounded-tr-none' 
-                    : 'bubble-them text-gray-200 rounded-tl-none'
+                    ? 'bubble-me rounded-tr-none origin-right' 
+                    : 'bubble-them text-gray-200 rounded-tl-none origin-left'
                 }`}
               >
                 {msg.text}
@@ -108,51 +129,93 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, onSendMessag
             </div>
           );
         })}
+        
+        {/* Typing Indicator */}
+        {activeTypingList.length > 0 && (
+          <div className="flex items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <div className="flex flex-col items-start">
+               <div className="flex items-baseline gap-2 mb-2 px-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
+                    {activeTypingList.length === 1 ? activeTypingList[0] : `${activeTypingList.length} people`}
+                  </span>
+                </div>
+                <div className="bg-white/5 border border-white/10 px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce [animation-delay:-0.3s]"></div>
+                  <div className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce [animation-delay:-0.15s]"></div>
+                  <div className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce"></div>
+                </div>
+            </div>
+          </div>
+        )}
+
         <div className="h-4"></div>
       </div>
 
-      {/* Input Area - Fixed at bottom of visible viewport */}
-      <div className="shrink-0 px-4 py-3 sm:py-4 border-t border-white/5 glass pb-[max(0.75rem,env(safe-area-inset-bottom, 0.75rem))]">
+      {/* Input Area */}
+      <div className="shrink-0 px-4 py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1.25rem,env(safe-area-inset-bottom, 1.25rem))]">
         <form 
           onSubmit={handleSubmit} 
           className="relative max-w-4xl mx-auto flex items-end gap-3"
         >
-          <div className="flex-1 min-h-[46px] relative bg-white/[0.04] border border-white/10 rounded-2xl overflow-hidden focus-within:border-white/30 transition-all">
+          <div className="flex-1 min-h-[48px] bg-white/[0.04] border border-white/10 rounded-2xl focus-within:border-white/30 focus-within:bg-white/[0.06] transition-all flex items-center overflow-hidden">
             <textarea 
               ref={textAreaRef}
               rows={1}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 640) {
-                  e.preventDefault();
-                  handleSubmit(e);
+              onChange={(e) => {
+                setInput(e.target.value);
+                adjustTextareaHeight();
+                if (e.target.value.trim().length > 0) {
+                  onTyping();
                 }
               }}
-              placeholder={isModerating ? "Checking..." : "Message zone..."}
-              disabled={isModerating}
-              className="w-full bg-transparent px-4 py-3 pr-12 focus:outline-none transition placeholder:text-gray-600 text-[16px] resize-none max-h-32 block leading-snug"
-              style={{ height: 'auto' }}
-              onInput={(e) => {
-                const target = e.target as HTMLTextAreaElement;
-                target.style.height = 'auto';
-                target.style.height = `${target.scrollHeight}px`;
-                scrollToBottom();
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
               }}
+              placeholder={isModerating ? "Verifying message..." : "Message this zone..."}
+              disabled={isModerating}
+              className="w-full bg-transparent px-4 py-3 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[140px] block leading-snug appearance-none"
+              style={{ height: 'auto' }}
             />
-            <button 
-              type="submit"
-              disabled={!input.trim() || isModerating}
-              className="absolute right-2 bottom-1.5 p-2 text-white disabled:opacity-20 transition active:scale-90"
-            >
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          </div>
+          
+          <button 
+            type="submit"
+            disabled={!input.trim() || isModerating}
+            className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
+              input.trim() || isModerating
+                ? 'bg-white text-black scale-100 opacity-100' 
+                : 'bg-white/5 text-gray-700 scale-95 opacity-50 pointer-events-none'
+            } ${justSent ? 'scale-110 rotate-12' : 'active:scale-90'}`}
+            title="Send Message"
+          >
+            {isModerating ? (
+              <div className="w-5 h-5 border-[3px] border-black/10 border-t-black rounded-full animate-spin"></div>
+            ) : (
+              <svg 
+                className={`w-6 h-6 transition-transform duration-300 ${input.trim() ? 'translate-x-0.5 -translate-y-0.5 rotate-0' : 'rotate-45'}`} 
+                fill="none" 
+                viewBox="0 0 24 24" 
+                stroke="currentColor"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
               </svg>
-            </button>
-          </div>
+            )}
+          </button>
         </form>
-        <div className="mt-2 text-center opacity-40 select-none">
-            <span className="text-[9px] text-gray-500 mono uppercase tracking-[0.2em] font-bold">Encrypted • Anonymous • No History</span>
+        
+        <div className="mt-3 flex items-center justify-center gap-6 opacity-30 select-none">
+            <div className="flex items-center gap-1.5">
+              <div className="w-1 h-1 rounded-full bg-green-500"></div>
+              <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Encrypted</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-1 h-1 rounded-full bg-blue-500"></div>
+              <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Anonymous</span>
+            </div>
         </div>
       </div>
     </div>

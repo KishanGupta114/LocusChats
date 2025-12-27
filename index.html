@@ -41,20 +41,22 @@
     .mono { font-family: 'JetBrains Mono', monospace; }
     
     .glass {
-      background: rgba(13, 13, 13, 0.9);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      background: rgba(13, 13, 13, 0.95);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
     }
 
     /* Message bubbles */
     .bubble-me {
       background: #ffffff;
       color: #000000;
+      font-weight: 500;
     }
     
     .bubble-them {
-      background: rgba(255, 255, 255, 0.07);
+      background: rgba(255, 255, 255, 0.08);
       border: 1px solid rgba(255, 255, 255, 0.1);
+      font-weight: 400;
     }
 
     .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -71,6 +73,12 @@
     }
     .animate-pulse-slow {
       animation: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    /* Smooth entry animations for bubbles */
+    .animate-in {
+      animation-duration: 300ms;
+      animation-fill-mode: both;
     }
   </style>
 <script type="importmap">

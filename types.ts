@@ -7,6 +7,11 @@ export interface Message {
   isSystem?: boolean;
 }
 
+export interface TypingUpdate {
+  username: string;
+  timestamp: number;
+}
+
 export interface User {
   username: string;
   color: string;
@@ -29,4 +34,5 @@ export interface AppState {
   isInRange: boolean;
   distance: number | null;
   timeLeft: number;
+  typingUsers: Record<string, number>;
 }
