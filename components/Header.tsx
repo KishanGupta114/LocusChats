@@ -6,10 +6,11 @@ interface HeaderProps {
   zone: Zone | null;
   timeLeft: number;
   distance: number | null;
+  status: 'connected' | 'reconnecting' | 'offline';
   onExit: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, onExit }) => {
+const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, status, onExit }) => {
   const [copied, setCopied] = useState(false);
 
   const formatTime = (ms: number) => {
@@ -43,10 +44,19 @@ const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, onExit }) => 
     }
   };
 
+  const getStatusColor = () => {
+    switch(status) {
+      case 'connected': return 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]';
+      case 'reconnecting': return 'bg-orange-500 animate-pulse';
+      case 'offline': return 'bg-red-500';
+      default: return 'bg-gray-500';
+    }
+  };
+
   return (
     <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-5 glass z-50">
       <div className="flex items-center gap-3">
-        <div className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
+        <div className={`w-2.5 h-2.5 rounded-full transition-colors duration-300 ${getStatusColor()}`}></div>
         <h1 className="font-black tracking-tighter text-[16px]">LOCUS<span className="text-gray-600">CHAT</span></h1>
       </div>
 
@@ -59,7 +69,7 @@ const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, onExit }) => 
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
             </svg>
-            <span className="text-[10px] font-black tracking-widest">{copied ? 'COPIED' : 'SHARE'}</span>
+            <span className="text-[10px] font-black tracking-widest uppercase">{copied ? 'COPIED' : 'SHARE'}</span>
           </button>
 
           <div className="flex flex-col items-end min-w-[50px]">

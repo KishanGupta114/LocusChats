@@ -4,6 +4,7 @@ import mqtt from 'mqtt';
 import { AppState, Zone, User, Message } from './types';
 import { RADIUS_KM, SESSION_DURATION_MS, ADJECTIVES, NOUNS, COLORS, LOCATION_CHECK_INTERVAL_MS } from './constants';
 import { calculateDistance, getCurrentPosition } from './utils/location';
+import { soundService } from './services/soundService';
 import JoinScreen from './components/JoinScreen';
 import ChatRoom from './components/ChatRoom';
 import Header from './components/Header';
@@ -19,6 +20,7 @@ const App: React.FC = () => {
     typingUsers: {},
   });
 
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
   const [invitedZone, setInvitedZone] = useState<Zone | null>(null);
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
@@ -45,7 +47,6 @@ const App: React.FC = () => {
 
     window.visualViewport?.addEventListener('resize', handleViewport);
     window.visualViewport?.addEventListener('scroll', handleViewport);
-    
     handleViewport();
 
     return () => {
@@ -54,88 +55,62 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Timer: Decrement timeLeft every second when in a zone
+  // Reliability: Visibility handling to refresh connection
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && mqttClientRef.current) {
+        // Force re-check or reconnect if we've been gone
+        if (!mqttClientRef.current.connected) {
+          console.log("Visibility restored: Reconnecting MQTT...");
+          mqttClientRef.current.reconnect();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // Timer
   useEffect(() => {
     if (!state.currentZone) return;
-
     const timer = setInterval(() => {
       const now = Date.now();
       const remaining = state.currentZone!.expiresAt - now;
-
       if (remaining <= 0) {
         handleExit();
       } else {
         setState(prev => ({ ...prev, timeLeft: remaining }));
       }
     }, 1000);
-
     return () => clearInterval(timer);
   }, [state.currentZone]);
 
-  // Proximity: Re-check location periodically
+  // Proximity Check
   useEffect(() => {
     if (!state.currentZone) return;
-
-    const checkProximity = async () => {
+    const proximityInterval = setInterval(async () => {
       try {
         const pos = await getCurrentPosition();
-        const dist = calculateDistance(
-          pos.coords.latitude,
-          pos.coords.longitude,
-          state.currentZone!.center.lat,
-          state.currentZone!.center.lng
-        );
-
+        const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, state.currentZone!.center.lat, state.currentZone!.center.lng);
         const inRange = dist <= RADIUS_KM;
-        setState(prev => ({ 
-          ...prev, 
-          distance: dist,
-          isInRange: inRange 
-        }));
-
-        if (!inRange) {
-          // Range failure is handled by the overlay in the return JSX
-        }
+        setState(prev => ({ ...prev, distance: dist, isInRange: inRange }));
       } catch (err) {
         console.error("Location re-check failed", err);
       }
-    };
-
-    const proximityInterval = setInterval(checkProximity, LOCATION_CHECK_INTERVAL_MS);
+    }, LOCATION_CHECK_INTERVAL_MS);
     return () => clearInterval(proximityInterval);
   }, [state.currentZone]);
 
-  // Cleanup stale typing indicators
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const anyStale = Object.values(stateRef.current.typingUsers).some(t => now - (t as number) > 3500);
-      
-      if (anyStale) {
-        setState(prev => {
-          const newTyping = { ...prev.typingUsers };
-          let changed = false;
-          for (const [user, time] of Object.entries(newTyping)) {
-            if (now - (time as number) > 3500) {
-              delete newTyping[user];
-              changed = true;
-            }
-          }
-          return changed ? { ...prev, typingUsers: newTyping } : prev;
-        });
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
   // MQTT Connection Management
+  // Fix: Explicitly return void in the cleanup function to prevent TypeScript errors.
   useEffect(() => {
     if (!state.currentZone) {
       if (mqttClientRef.current) {
         mqttClientRef.current.end();
         mqttClientRef.current = null;
       }
+      setConnectionStatus('offline');
       return;
     }
 
@@ -144,12 +119,22 @@ const App: React.FC = () => {
         clean: true,
         connectTimeout: 4000,
         reconnectPeriod: 1000,
+        keepalive: 30, // Frequent keepalive for mobile browsers
     });
 
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
 
     client.on('connect', () => {
       client.subscribe(topic);
+      setConnectionStatus('connected');
+    });
+
+    client.on('reconnect', () => {
+      setConnectionStatus('reconnecting');
+    });
+
+    client.on('offline', () => {
+      setConnectionStatus('offline');
     });
 
     client.on('message', (t, payload) => {
@@ -161,15 +146,19 @@ const App: React.FC = () => {
             if (data.sender === stateRef.current.currentUser?.username) return;
             setState(prev => ({
               ...prev,
-              typingUsers: {
-                ...prev.typingUsers,
-                [data.sender]: Date.now()
-              }
+              typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() }
             }));
           } else {
             const msg = data.type === 'message' ? data.payload : data;
+            
             setState(prev => {
               if (prev.messages.some(m => m.id === msg.id)) return prev;
+              
+              // Audio feedback for received messages
+              if (msg.sender !== prev.currentUser?.username) {
+                soundService.playReceive();
+              }
+
               const newTyping = { ...prev.typingUsers };
               delete newTyping[msg.sender];
               return {
@@ -186,17 +175,15 @@ const App: React.FC = () => {
     });
 
     mqttClientRef.current = client;
-    return () => client.end();
+    // Fix: Wrapping client.end() in a block ensures the cleanup returns void.
+    return () => { client.end(); };
   }, [state.currentZone?.id]);
 
   const handleJoin = async () => {
     try {
       const pos = await getCurrentPosition();
       const now = Date.now();
-      
       let zoneToUse: Zone;
-
-      // Handle invite links if present in URL on mount
       const searchParams = new URLSearchParams(window.location.search);
       const zoneEncoded = searchParams.get('z');
       
@@ -204,17 +191,14 @@ const App: React.FC = () => {
         try {
           const decoded = atob(zoneEncoded);
           const [id, lat, lng, expiresAt] = decoded.split('|');
-          const zoneData: Zone = {
+          zoneToUse = {
             id,
             center: { lat: parseFloat(lat), lng: parseFloat(lng) },
-            createdAt: now, // We treat the join time as new for TTL relative to local, but expiresAt is absolute
+            createdAt: now,
             expiresAt: parseInt(expiresAt)
           };
-          
-          const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, zoneData.center.lat, zoneData.center.lng);
-          if (dist <= RADIUS_KM) {
-            zoneToUse = zoneData;
-          } else {
+          const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, zoneToUse.center.lat, zoneToUse.center.lng);
+          if (dist > RADIUS_KM) {
             alert(`You are too far from this zone (${dist.toFixed(2)}km).`);
             return;
           }
@@ -236,13 +220,6 @@ const App: React.FC = () => {
         color: COLORS[Math.floor(Math.random() * COLORS.length)]
       };
 
-      const dist = calculateDistance(
-        pos.coords.latitude,
-        pos.coords.longitude,
-        zoneToUse.center.lat,
-        zoneToUse.center.lng
-      );
-
       setState(prev => ({
         ...prev,
         currentZone: zoneToUse,
@@ -250,19 +227,16 @@ const App: React.FC = () => {
         messages: [{
           id: 'sys-' + now,
           sender: 'System',
-          text: `ENCRYPTED CONNECTION ESTABLISHED IN ZONE ${zoneToUse.id.toUpperCase()}.`,
+          text: `SECURE TUNNEL ESTABLISHED. WELCOME TO ${zoneToUse.id.toUpperCase()}.`,
           timestamp: now,
           isSystem: true
         }],
         timeLeft: zoneToUse.expiresAt - now,
         isInRange: true,
-        distance: dist,
+        distance: calculateDistance(pos.coords.latitude, pos.coords.longitude, zoneToUse.center.lat, zoneToUse.center.lng),
         typingUsers: {}
       }));
-
-      setInvitedZone(null);
       window.history.replaceState({}, '', window.location.pathname);
-
     } catch (err) {
       alert("Please allow location access to join Locus Chat.");
     }
@@ -270,15 +244,10 @@ const App: React.FC = () => {
 
   const handleExit = () => {
     setState({
-      currentZone: null,
-      currentUser: null,
-      messages: [],
-      isInRange: true,
-      distance: null,
-      timeLeft: SESSION_DURATION_MS,
+      currentZone: null, currentUser: null, messages: [],
+      isInRange: true, distance: null, timeLeft: SESSION_DURATION_MS,
       typingUsers: {},
     });
-    setInvitedZone(null);
   };
 
   const sendMessage = (text: string) => {
@@ -293,33 +262,25 @@ const App: React.FC = () => {
 
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
     mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }));
+    
+    // Audio feedback for sent message
+    soundService.playSend();
   };
 
   const broadcastTyping = () => {
-    if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
-    if (typingTimeoutRef.current) return;
-    
+    if (!state.currentUser || !state.currentZone || !mqttClientRef.current || typingTimeoutRef.current) return;
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
-    mqttClientRef.current.publish(topic, JSON.stringify({ 
-      type: 'typing', 
-      sender: state.currentUser.username,
-      timestamp: Date.now()
-    }));
-
-    typingTimeoutRef.current = setTimeout(() => {
-      typingTimeoutRef.current = null;
-    }, 2000);
+    mqttClientRef.current.publish(topic, JSON.stringify({ type: 'typing', sender: state.currentUser.username, timestamp: Date.now() }));
+    typingTimeoutRef.current = setTimeout(() => { typingTimeoutRef.current = null; }, 2000);
   };
 
   return (
-    <div 
-      ref={appRef}
-      className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden will-change-transform"
-    >
+    <div ref={appRef} className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden will-change-transform">
       <Header 
         zone={state.currentZone} 
         timeLeft={state.timeLeft} 
         distance={state.distance}
+        status={connectionStatus}
         onExit={handleExit}
       />
       
@@ -346,10 +307,7 @@ const App: React.FC = () => {
           </div>
           <h2 className="text-3xl font-bold mb-4">Signal Lost</h2>
           <p className="text-gray-400 mb-8 leading-relaxed max-w-xs">You have moved beyond the 2km secure radius. This session has been wiped.</p>
-          <button 
-            onClick={handleExit}
-            className="w-full max-w-[240px] px-8 py-4 bg-white text-black font-black rounded-full hover:bg-gray-200 transition active:scale-95 uppercase tracking-widest text-xs"
-          >
+          <button onClick={handleExit} className="w-full max-w-[240px] px-8 py-4 bg-white text-black font-black rounded-full hover:bg-gray-200 transition active:scale-95 uppercase tracking-widest text-xs">
             Purge Session
           </button>
         </div>

@@ -161,7 +161,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   handleSubmit();
                 }
               }}
-              placeholder={isModerating ? "Transmitting..." : "Make changes, add new features, ask for anything"}
+              placeholder={isModerating ? "Transmitting..." : "Type something..."}
               disabled={isModerating}
               autoComplete="off"
               autoCorrect="off"
