@@ -1,14 +1,12 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import mqtt from 'mqtt';
 import { AppState, Zone, User, Message } from './types';
 import { RADIUS_KM, SESSION_DURATION_MS, LOCATION_CHECK_INTERVAL_MS, ADJECTIVES, NOUNS, COLORS } from './constants';
 import { calculateDistance, getCurrentPosition } from './utils/location';
 import JoinScreen from './components/JoinScreen';
 import ChatRoom from './components/ChatRoom';
 import Header from './components/Header';
-
-// We use BroadcastChannel to simulate a multi-tab local "server" experience for this demo environment
-const bc = new BroadcastChannel('locus_chat_sync');
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
@@ -21,6 +19,7 @@ const App: React.FC = () => {
   });
 
   const [invitedZone, setInvitedZone] = useState<Zone | null>(null);
+  const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
   
   useEffect(() => {
@@ -41,7 +40,6 @@ const App: React.FC = () => {
           expiresAt: decoded.e
         };
         
-        // Check if expired
         if (Date.now() > zone.expiresAt) {
           alert("This shared zone has already expired.");
           window.history.replaceState({}, '', window.location.pathname);
@@ -53,6 +51,55 @@ const App: React.FC = () => {
       }
     }
   }, []);
+
+  // MQTT Connection Management
+  useEffect(() => {
+    if (!state.currentZone) {
+      if (mqttClientRef.current) {
+        mqttClientRef.current.end();
+        mqttClientRef.current = null;
+      }
+      return;
+    }
+
+    // Connect to public ephemeral relay
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+        clientId: 'locus_' + Math.random().toString(16).substr(2, 8),
+        clean: true,
+        connectTimeout: 4000,
+        reconnectPeriod: 1000,
+    });
+
+    const topic = `locuschat/v1/zones/${state.currentZone.id}`;
+
+    client.on('connect', () => {
+      client.subscribe(topic);
+    });
+
+    client.on('message', (t, payload) => {
+      if (t === topic) {
+        try {
+          const msg = JSON.parse(payload.toString());
+          // Duplicate check
+          setState(prev => {
+            if (prev.messages.some(m => m.id === msg.id)) return prev;
+            return {
+              ...prev,
+              messages: [...prev.messages, msg]
+            };
+          });
+        } catch (e) {
+          console.error("Failed to parse incoming message", e);
+        }
+      }
+    });
+
+    mqttClientRef.current = client;
+
+    return () => {
+      client.end();
+    };
+  }, [state.currentZone?.id]);
 
   // Handle Zone Expiration
   useEffect(() => {
@@ -101,25 +148,6 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Sync messages across tabs (simulating a backend)
-  useEffect(() => {
-    const handleSync = (event: MessageEvent) => {
-      const { type, payload } = event.data;
-      if (type === 'NEW_MESSAGE') {
-        // Only accept messages for our specific zone
-        if (stateRef.current.currentZone && payload.zoneId === stateRef.current.currentZone.id) {
-            setState(prev => ({
-              ...prev,
-              messages: [...prev.messages, payload]
-            }));
-        }
-      }
-    };
-
-    bc.addEventListener('message', handleSync);
-    return () => bc.removeEventListener('message', handleSync);
-  }, []);
-
   const handleJoin = async () => {
     try {
       const pos = await getCurrentPosition();
@@ -128,7 +156,6 @@ const App: React.FC = () => {
       let zoneToUse: Zone;
 
       if (invitedZone) {
-        // Verify distance for invited zone
         const dist = calculateDistance(
           pos.coords.latitude,
           pos.coords.longitude,
@@ -137,12 +164,11 @@ const App: React.FC = () => {
         );
 
         if (dist > RADIUS_KM) {
-          alert(`You are outside the 2km range of this zone (${dist.toFixed(2)}km away). You cannot join.`);
+          alert(`You are outside the 2km range (${dist.toFixed(2)}km away).`);
           return;
         }
         zoneToUse = invitedZone;
       } else {
-        // Create new zone
         zoneToUse = {
           id: Math.random().toString(36).substr(2, 9),
           center: { lat: pos.coords.latitude, lng: pos.coords.longitude },
@@ -170,7 +196,7 @@ const App: React.FC = () => {
         messages: [{
           id: 'sys-' + now,
           sender: 'System',
-          text: `Welcome, ${newUser.username}. You are within the 2km zone limit.`,
+          text: `Encrypted connection established in Zone ${zoneToUse.id.slice(0,4)}.`,
           timestamp: now,
           isSystem: true
         }],
@@ -179,9 +205,7 @@ const App: React.FC = () => {
         distance: dist
       }));
 
-      // Clear the invite state
       setInvitedZone(null);
-      // Clean URL
       window.history.replaceState({}, '', window.location.pathname);
 
     } catch (err) {
@@ -202,16 +226,17 @@ const App: React.FC = () => {
   };
 
   const sendMessage = (text: string) => {
-    if (!state.currentUser || !state.currentZone) return;
-    const msg: Message & { zoneId: string } = {
+    if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
+    
+    const msg: Message = {
       id: Math.random().toString(36).substr(2, 9),
       sender: state.currentUser.username,
       text,
-      timestamp: Date.now(),
-      zoneId: state.currentZone.id
+      timestamp: Date.now()
     };
-    setState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-    bc.postMessage({ type: 'NEW_MESSAGE', payload: msg });
+
+    const topic = `locuschat/v1/zones/${state.currentZone.id}`;
+    mqttClientRef.current.publish(topic, JSON.stringify(msg));
   };
 
   return (
