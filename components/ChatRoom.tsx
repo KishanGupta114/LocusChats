@@ -14,12 +14,10 @@ interface ChatRoomProps {
 const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers, onSendMessage, onTyping }) => {
   const [input, setInput] = useState('');
   const [isModerating, setIsModerating] = useState(false);
-  const [justSent, setJustSent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeTypingList = Object.keys(typingUsers).filter(u => u !== currentUser?.username);
-  const hasText = input.trim().length > 0;
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     if (scrollRef.current) {
@@ -58,7 +56,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     if (check.safe) {
       onSendMessage(text);
       setInput('');
-      setJustSent(true);
       
       if (textAreaRef.current) {
         textAreaRef.current.style.height = 'auto';
@@ -66,7 +63,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         textAreaRef.current.focus(); 
       }
       
-      setTimeout(() => setJustSent(false), 500);
       setTimeout(() => scrollToBottom('smooth'), 50);
     } else {
       alert(`Message blocked: ${check.reason || 'Harmful content detected'}`);
@@ -143,12 +139,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       </div>
 
       {/* Input Area */}
-      <div className="shrink-0 px-4 py-3 sm:py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1rem,env(safe-area-inset-bottom, 1rem))]">
+      <div className="shrink-0 px-4 py-3 sm:py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1.5rem,env(safe-area-inset-bottom, 1.5rem))]">
         <form 
           onSubmit={handleSubmit} 
-          className="relative max-w-4xl mx-auto flex items-end gap-3"
+          className="relative max-w-4xl mx-auto"
         >
-          <div className="flex-1 min-h-[48px] bg-white/[0.04] border border-white/10 rounded-2xl focus-within:border-white/30 transition-all flex items-center overflow-hidden">
+          <div className={`relative bg-white/[0.04] border rounded-2xl transition-all flex items-center overflow-hidden ${isModerating ? 'border-white/30 brightness-110' : 'border-white/10 focus-within:border-white/30'}`}>
             <textarea 
               ref={textAreaRef}
               rows={1}
@@ -161,54 +157,32 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
+                if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   handleSubmit();
                 }
               }}
-              placeholder={isModerating ? "Verifying..." : "Message zone..."}
+              placeholder={isModerating ? "Encrypting message..." : "Type message and tap enter..."}
               disabled={isModerating}
               autoComplete="off"
               autoCorrect="off"
               spellCheck="false"
-              className="w-full bg-transparent px-4 py-3 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[128px] block leading-snug appearance-none"
+              className="w-full bg-transparent px-4 py-3.5 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[128px] block leading-snug appearance-none text-white"
               style={{ height: 'auto' }}
             />
-          </div>
-          
-          <div className="flex-none flex items-center justify-center w-12 h-12">
-            <button 
-              type="submit"
-              disabled={!hasText || isModerating}
-              className={`w-full h-full rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
-                hasText || isModerating
-                  ? 'bg-white text-black opacity-100 scale-100' 
-                  : 'bg-white/5 text-gray-700 opacity-0 scale-50 pointer-events-none'
-              } ${justSent ? 'bg-green-500 scale-110' : 'active:scale-90'} ${hasText ? 'animate-send-pop' : ''}`}
-            >
-              {isModerating ? (
-                <div className="w-5 h-5 border-[3px] border-black/10 border-t-black rounded-full animate-spin"></div>
-              ) : justSent ? (
-                <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                </svg>
-              ) : (
-                <svg 
-                  className={`w-6 h-6 transition-transform duration-300 ${hasText ? 'translate-x-0.5 -translate-y-0.5' : 'rotate-45'}`} 
-                  fill="none" 
-                  viewBox="0 0 24 24" 
-                  stroke="currentColor"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              )}
-            </button>
+            
+            {/* Inline Loading dot */}
+            {isModerating && (
+              <div className="absolute right-4 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></div>
+              </div>
+            )}
           </div>
         </form>
         
-        <div className="mt-2 flex items-center justify-center gap-6 opacity-30 select-none">
-            <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Memory Only</span>
-            <span className="text-[8px] text-gray-500 mono uppercase tracking-[0.4em] font-black">Anonymous</span>
+        <div className="mt-2.5 flex items-center justify-center gap-6 opacity-20 select-none">
+            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black">Secure Tunnel</span>
+            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black">Auto-Purge active</span>
         </div>
       </div>
     </div>
