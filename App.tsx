@@ -32,19 +32,24 @@ const App: React.FC = () => {
     const zParam = params.get('z');
     if (zParam) {
       try {
-        const decoded = JSON.parse(atob(zParam));
-        const zone: Zone = {
-          id: decoded.i,
-          center: { lat: decoded.la, lng: decoded.lo },
-          createdAt: decoded.e - SESSION_DURATION_MS,
-          expiresAt: decoded.e
-        };
+        const decodedString = atob(zParam);
+        // Format: ID|LAT|LNG|EXPIRY
+        const [id, lat, lng, expiry] = decodedString.split('|');
         
-        if (Date.now() > zone.expiresAt) {
-          alert("This shared zone has already expired.");
-          window.history.replaceState({}, '', window.location.pathname);
-        } else {
-          setInvitedZone(zone);
+        if (id && lat && lng && expiry) {
+          const zone: Zone = {
+            id: id,
+            center: { lat: parseFloat(lat), lng: parseFloat(lng) },
+            createdAt: parseInt(expiry) - SESSION_DURATION_MS,
+            expiresAt: parseInt(expiry)
+          };
+          
+          if (Date.now() > zone.expiresAt) {
+            alert("This shared zone has already expired.");
+            window.history.replaceState({}, '', window.location.pathname);
+          } else {
+            setInvitedZone(zone);
+          }
         }
       } catch (e) {
         console.error("Failed to parse shared zone", e);
@@ -240,7 +245,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden relative">
+    <div className="h-[100dvh] w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden relative">
       <Header 
         zone={state.currentZone} 
         timeLeft={state.timeLeft} 
@@ -248,7 +253,7 @@ const App: React.FC = () => {
         onExit={handleExit}
       />
       
-      <main className="flex-1 relative">
+      <main className="flex-1 relative overflow-hidden flex flex-col">
         {!state.currentZone ? (
           <JoinScreen onJoin={handleJoin} invitedZone={invitedZone} />
         ) : (
@@ -261,7 +266,7 @@ const App: React.FC = () => {
       </main>
 
       {!state.isInRange && state.currentZone && (
-        <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center z-50 p-6 text-center">
+        <div className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-6 text-center">
           <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4">
             <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
