@@ -1,0 +1,7 @@
+{
+  "name": "Locus Chat",
+  "description": "A privacy-first, location-based ephemeral chat application that connects people within a 2km radius for strictly one hour with zero data retention.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
