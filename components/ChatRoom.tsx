@@ -34,12 +34,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     scrollToBottom();
   }, [messages, activeTypingList.length]);
 
-  // Handle visual viewport resizing (keyboard appearance)
   useEffect(() => {
     const handleResize = () => {
-      setTimeout(() => scrollToBottom('auto'), 100);
+      // Keep chat scrolled to bottom when keyboard toggles
+      setTimeout(() => scrollToBottom('auto'), 50);
     };
-
     window.visualViewport?.addEventListener('resize', handleResize);
     return () => window.visualViewport?.removeEventListener('resize', handleResize);
   }, []);
@@ -47,9 +46,19 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const adjustTextareaHeight = () => {
     const textarea = textAreaRef.current;
     if (textarea) {
+      // Reset height to correctly calculate scrollHeight
       textarea.style.height = 'auto';
-      const newHeight = Math.min(textarea.scrollHeight, 140); 
+      // Limit to 128px (~5-6 lines)
+      const newHeight = Math.min(textarea.scrollHeight, 128);
       textarea.style.height = `${newHeight}px`;
+      
+      // Prevent browser from trying to scroll the page instead of just the textarea
+      if (newHeight >= 128) {
+        textarea.style.overflowY = 'auto';
+      } else {
+        textarea.style.overflowY = 'hidden';
+      }
+      
       scrollToBottom('auto');
     }
   };
@@ -70,7 +79,9 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       
       if (textAreaRef.current) {
         textAreaRef.current.style.height = 'auto';
-        textAreaRef.current.focus();
+        textAreaRef.current.style.overflowY = 'hidden';
+        // We don't call focus() if it might trigger a zoom, but at 16px it's safe
+        textAreaRef.current.focus(); 
       }
       
       setTimeout(() => setJustSent(false), 500);
@@ -81,12 +92,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0a0a] overflow-hidden">
+    <div className="flex flex-col h-full bg-[#0a0a0a] overflow-hidden relative">
       {/* Message Area */}
       <div 
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 py-4 sm:px-8 space-y-6 no-scrollbar"
-        style={{ touchAction: 'pan-y' }}
+        style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
       >
         {messages.map((msg, idx) => {
           const isMe = msg.sender === currentUser?.username;
@@ -105,7 +116,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           return (
             <div 
               key={msg.id} 
-              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-in fade-in zoom-in-95 slide-in-from-bottom-3 duration-500 ease-out`}
+              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message`}
             >
               {showSender && (
                 <div className={`flex items-baseline gap-2 mb-2 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -118,7 +129,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                 </div>
               )}
               <div 
-                className={`min-w-[40px] max-w-[88%] px-4 py-3 rounded-2xl text-[15px] leading-relaxed break-words shadow-2xl transform transition-transform ${
+                className={`min-w-[40px] max-w-[88%] px-4 py-3 rounded-2xl text-[15px] leading-relaxed break-words shadow-2xl transition-all ${
                   isMe 
                     ? 'bubble-me rounded-tr-none origin-right' 
                     : 'bubble-them text-gray-200 rounded-tl-none origin-left'
@@ -132,7 +143,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         
         {/* Typing Indicator */}
         {activeTypingList.length > 0 && (
-          <div className="flex items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-start animate-message">
             <div className="flex flex-col items-start">
                <div className="flex items-baseline gap-2 mb-2 px-1">
                   <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
@@ -148,14 +159,15 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           </div>
         )}
 
-        <div className="h-4"></div>
+        <div className="h-6"></div>
       </div>
 
-      {/* Input Area */}
+      {/* Stable Input Area */}
       <div className="shrink-0 px-4 py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1.25rem,env(safe-area-inset-bottom, 1.25rem))]">
         <form 
           onSubmit={handleSubmit} 
           className="relative max-w-4xl mx-auto flex items-end gap-3"
+          style={{ touchAction: 'none' }} 
         >
           <div className="flex-1 min-h-[48px] bg-white/[0.04] border border-white/10 rounded-2xl focus-within:border-white/30 focus-within:bg-white/[0.06] transition-all flex items-center overflow-hidden">
             <textarea 
@@ -175,10 +187,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   handleSubmit();
                 }
               }}
-              placeholder={isModerating ? "Verifying message..." : "Message this zone..."}
+              placeholder={isModerating ? "Verifying..." : "Message zone..."}
               disabled={isModerating}
-              className="w-full bg-transparent px-4 py-3 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[140px] block leading-snug appearance-none"
-              style={{ height: 'auto' }}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="sentences"
+              className="w-full bg-transparent px-4 py-3 focus:outline-none transition-all placeholder:text-gray-600 text-[16px] resize-none max-h-[128px] block leading-snug appearance-none"
+              style={{ height: 'auto', outline: 'none' }}
             />
           </div>
           
@@ -187,13 +202,17 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
             disabled={!input.trim() || isModerating}
             className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
               input.trim() || isModerating
-                ? 'bg-white text-black scale-100 opacity-100' 
+                ? 'bg-white text-black scale-100 opacity-100 animate-send-success' 
                 : 'bg-white/5 text-gray-700 scale-95 opacity-50 pointer-events-none'
-            } ${justSent ? 'scale-110 rotate-12' : 'active:scale-90'}`}
+            } ${justSent ? 'bg-green-500 scale-105' : 'active:scale-90'}`}
             title="Send Message"
           >
             {isModerating ? (
               <div className="w-5 h-5 border-[3px] border-black/10 border-t-black rounded-full animate-spin"></div>
+            ) : justSent ? (
+              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+              </svg>
             ) : (
               <svg 
                 className={`w-6 h-6 transition-transform duration-300 ${input.trim() ? 'translate-x-0.5 -translate-y-0.5 rotate-0' : 'rotate-45'}`} 

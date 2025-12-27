@@ -19,10 +19,13 @@
       margin: 0;
       padding: 0;
       overflow: hidden;
-      position: fixed; /* Strict lock */
+      position: fixed; /* Strictly lock background */
       width: 100%;
       background-color: #0a0a0a;
-      touch-action: none; /* Prevents default touch gestures like pinch-to-zoom */
+      /* Prevent all system gestures except single finger scroll in permitted areas */
+      touch-action: none; 
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     #root {
@@ -30,20 +33,24 @@
       width: 100%;
       display: flex;
       flex-direction: column;
+      position: absolute;
+      top: 0;
+      left: 0;
     }
 
     body {
       font-family: 'Inter', sans-serif;
       color: #e5e7eb;
       overscroll-behavior: none;
+      -webkit-font-smoothing: antialiased;
     }
 
     .mono { font-family: 'JetBrains Mono', monospace; }
     
     .glass {
-      background: rgba(13, 13, 13, 0.95);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
+      background: rgba(13, 13, 13, 0.96);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
     }
 
     /* Message bubbles */
@@ -51,20 +58,23 @@
       background: #ffffff;
       color: #000000;
       font-weight: 500;
+      box-shadow: 0 4px 12px rgba(255, 255, 255, 0.1);
     }
     
     .bubble-them {
       background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       font-weight: 400;
     }
 
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-    /* Fix for iOS Safari input zoom */
+    /* CRITICAL: Fix for iOS Safari input zoom and stability */
     input, textarea {
-      font-size: 16px !important; /* Prevents auto-zoom on focus */
+      font-size: 16px !important; /* Must be at least 16px to prevent iOS auto-zoom */
+      -webkit-user-select: text;
+      user-select: text;
     }
 
     @keyframes pulse-slow {
@@ -75,10 +85,21 @@
       animation: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
     }
 
-    /* Smooth entry animations for bubbles */
-    .animate-in {
-      animation-duration: 300ms;
-      animation-fill-mode: both;
+    @keyframes message-pop {
+      0% { transform: scale(0.95) translateY(10px); opacity: 0; }
+      100% { transform: scale(1) translateY(0); opacity: 1; }
+    }
+    .animate-message {
+      animation: message-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+    }
+
+    @keyframes send-success {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.1); filter: brightness(1.2); }
+      100% { transform: scale(1); }
+    }
+    .animate-send-success {
+      animation: send-success 0.4s ease-out;
     }
   </style>
 <script type="importmap">
