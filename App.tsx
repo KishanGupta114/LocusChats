@@ -21,10 +21,32 @@ const App: React.FC = () => {
   const [invitedZone, setInvitedZone] = useState<Zone | null>(null);
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
+  const appRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // Unified Visual Viewport Management
+  useEffect(() => {
+    const handleViewport = () => {
+      if (appRef.current && window.visualViewport) {
+        // Force the app height to the visible viewport (handles keyboards)
+        appRef.current.style.height = `${window.visualViewport.height}px`;
+        // Handle scroll offset that Safari occasionally adds
+        window.scrollTo(0, 0);
+      }
+    };
+
+    window.visualViewport?.addEventListener('resize', handleViewport);
+    window.visualViewport?.addEventListener('scroll', handleViewport);
+    handleViewport();
+
+    return () => {
+      window.visualViewport?.removeEventListener('resize', handleViewport);
+      window.visualViewport?.removeEventListener('scroll', handleViewport);
+    };
+  }, []);
 
   // Parse URL on mount
   useEffect(() => {
@@ -33,7 +55,6 @@ const App: React.FC = () => {
     if (zParam) {
       try {
         const decodedString = atob(zParam);
-        // Format: ID|LAT|LNG|EXPIRY
         const [id, lat, lng, expiry] = decodedString.split('|');
         
         if (id && lat && lng && expiry) {
@@ -67,7 +88,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // Connect to public ephemeral relay
     const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
         clientId: 'locus_' + Math.random().toString(16).substr(2, 8),
         clean: true,
@@ -85,7 +105,6 @@ const App: React.FC = () => {
       if (t === topic) {
         try {
           const msg = JSON.parse(payload.toString());
-          // Duplicate check
           setState(prev => {
             if (prev.messages.some(m => m.id === msg.id)) return prev;
             return {
@@ -100,10 +119,7 @@ const App: React.FC = () => {
     });
 
     mqttClientRef.current = client;
-
-    return () => {
-      client.end();
-    };
+    return () => client.end();
   }, [state.currentZone?.id]);
 
   // Handle Zone Expiration
@@ -113,12 +129,8 @@ const App: React.FC = () => {
     const timer = setInterval(() => {
       const now = Date.now();
       const remaining = Math.max(0, state.currentZone!.expiresAt - now);
-      
       setState(prev => ({ ...prev, timeLeft: remaining }));
-
-      if (remaining <= 0) {
-        handleExit();
-      }
+      if (remaining <= 0) handleExit();
     }, 1000);
 
     return () => clearInterval(timer);
@@ -141,9 +153,7 @@ const App: React.FC = () => {
         const inRange = dist <= RADIUS_KM;
         setState(prev => ({ ...prev, isInRange: inRange, distance: dist }));
 
-        if (!inRange) {
-          handleExit();
-        }
+        if (!inRange) handleExit();
       } catch (error) {
         console.error("Location error:", error);
       }
@@ -183,7 +193,7 @@ const App: React.FC = () => {
       }
 
       const newUser: User = {
-        username: `${ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]} ${NOUNS[Math.floor(Math.random() * NOUNS.length)]}`,
+        username: `${ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]} ${NOUNS[Math.floor(Math.random() * NOUNS.length)]}`.toUpperCase(),
         color: COLORS[Math.floor(Math.random() * COLORS.length)]
       };
 
@@ -201,7 +211,7 @@ const App: React.FC = () => {
         messages: [{
           id: 'sys-' + now,
           sender: 'System',
-          text: `Encrypted connection established in Zone ${zoneToUse.id.slice(0,4)}.`,
+          text: `ENCRYPTED CONNECTION ESTABLISHED IN ZONE ${zoneToUse.id.toUpperCase()}.`,
           timestamp: now,
           isSystem: true
         }],
@@ -245,7 +255,10 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-[100dvh] w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden relative">
+    <div 
+      ref={appRef}
+      className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden"
+    >
       <Header 
         zone={state.currentZone} 
         timeLeft={state.timeLeft} 
@@ -253,7 +266,7 @@ const App: React.FC = () => {
         onExit={handleExit}
       />
       
-      <main className="flex-1 relative overflow-hidden flex flex-col">
+      <main className="flex-1 relative overflow-hidden flex flex-col min-h-0 bg-[#0a0a0a]">
         {!state.currentZone ? (
           <JoinScreen onJoin={handleJoin} invitedZone={invitedZone} />
         ) : (
@@ -266,19 +279,19 @@ const App: React.FC = () => {
       </main>
 
       {!state.isInRange && state.currentZone && (
-        <div className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-6 text-center">
-          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4">
-            <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="absolute inset-0 bg-black flex flex-col items-center justify-center z-[100] p-8 text-center animate-in fade-in zoom-in duration-300">
+          <div className="w-20 h-20 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center mb-6">
+            <svg className="w-10 h-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
-          <h2 className="text-2xl font-bold mb-2">Outside Range</h2>
-          <p className="text-gray-400 mb-6">You have moved beyond the 2km limit. Your session has been terminated and data purged.</p>
+          <h2 className="text-3xl font-bold mb-4">Signal Lost</h2>
+          <p className="text-gray-400 mb-8 leading-relaxed max-w-xs">You have moved beyond the 2km secure radius. This session has been wiped for your security.</p>
           <button 
             onClick={handleExit}
-            className="px-6 py-2 bg-white text-black font-semibold rounded-lg hover:bg-gray-200 transition"
+            className="w-full max-w-[240px] px-8 py-4 bg-white text-black font-black rounded-full hover:bg-gray-200 transition active:scale-95 uppercase tracking-widest text-xs"
           >
-            Acknowledge
+            Acknowledge Purge
           </button>
         </div>
       )}
