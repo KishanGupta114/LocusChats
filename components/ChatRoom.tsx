@@ -44,8 +44,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     }
   };
 
-  const handleSubmit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSubmit = async () => {
     const text = input.trim();
     if (!text || isModerating) return;
 
@@ -138,17 +137,15 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         <div className="h-4"></div>
       </div>
 
-      {/* Input Area */}
+      {/* Input Area (Strictly Buttonless) */}
       <div className="shrink-0 px-4 py-3 sm:py-4 border-t border-white/5 glass bg-[#0d0d0d]/98 pb-[max(1.5rem,env(safe-area-inset-bottom, 1.5rem))]">
-        <form 
-          onSubmit={handleSubmit} 
-          className="relative max-w-4xl mx-auto"
-        >
+        <div className="max-w-4xl mx-auto">
           <div className={`relative bg-white/[0.04] border rounded-2xl transition-all flex items-center overflow-hidden ${isModerating ? 'border-white/30 brightness-110' : 'border-white/10 focus-within:border-white/30'}`}>
             <textarea 
               ref={textAreaRef}
               rows={1}
               value={input}
+              enterKeyHint="send"
               onChange={(e) => {
                 setInput(e.target.value);
                 adjustTextareaHeight();
@@ -162,7 +159,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   handleSubmit();
                 }
               }}
-              placeholder={isModerating ? "Encrypting message..." : "Type message and tap enter..."}
+              placeholder={isModerating ? "Transmitting..." : "Message... (Enter to send)"}
               disabled={isModerating}
               autoComplete="off"
               autoCorrect="off"
@@ -171,18 +168,18 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               style={{ height: 'auto' }}
             />
             
-            {/* Inline Loading dot */}
+            {/* Inline Loading Status */}
             {isModerating && (
-              <div className="absolute right-4 flex items-center gap-2">
+              <div className="absolute right-4 flex items-center">
                 <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></div>
               </div>
             )}
           </div>
-        </form>
+        </div>
         
         <div className="mt-2.5 flex items-center justify-center gap-6 opacity-20 select-none">
-            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black">Secure Tunnel</span>
-            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black">Auto-Purge active</span>
+            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black">Zero Retention</span>
+            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black">Ephemeral Only</span>
         </div>
       </div>
     </div>
