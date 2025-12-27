@@ -8,6 +8,7 @@ import { soundService } from './services/soundService';
 import JoinScreen from './components/JoinScreen';
 import ChatRoom from './components/ChatRoom';
 import Header from './components/Header';
+import ExpiryWarning from './components/ExpiryWarning';
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
@@ -22,14 +23,23 @@ const App: React.FC = () => {
 
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
   const [invitedZone, setInvitedZone] = useState<Zone | null>(null);
+  const [showExpiryWarning, setShowExpiryWarning] = useState(false);
+  
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
   const typingTimeoutRef = useRef<any>(null);
   const appRef = useRef<HTMLDivElement>(null);
+  const warningShownRef = useRef(false);
   
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // Reset warning ref when zone changes
+  useEffect(() => {
+    warningShownRef.current = false;
+    setShowExpiryWarning(false);
+  }, [state.currentZone?.id]);
 
   // Robust Viewport Management for Mobile Keyboards
   useEffect(() => {
@@ -59,9 +69,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && mqttClientRef.current) {
-        // Force re-check or reconnect if we've been gone
         if (!mqttClientRef.current.connected) {
-          console.log("Visibility restored: Reconnecting MQTT...");
           mqttClientRef.current.reconnect();
         }
       }
@@ -77,10 +85,19 @@ const App: React.FC = () => {
     const timer = setInterval(() => {
       const now = Date.now();
       const remaining = state.currentZone!.expiresAt - now;
+      
       if (remaining <= 0) {
         handleExit();
       } else {
         setState(prev => ({ ...prev, timeLeft: remaining }));
+        
+        // Trigger 5-minute warning
+        if (remaining <= 300000 && !warningShownRef.current) {
+          setShowExpiryWarning(true);
+          warningShownRef.current = true;
+          // Subtly notify with receive sound to grab attention
+          soundService.playReceive();
+        }
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -103,7 +120,6 @@ const App: React.FC = () => {
   }, [state.currentZone]);
 
   // MQTT Connection Management
-  // Fix: Explicitly return void in the cleanup function to prevent TypeScript errors.
   useEffect(() => {
     if (!state.currentZone) {
       if (mqttClientRef.current) {
@@ -119,7 +135,7 @@ const App: React.FC = () => {
         clean: true,
         connectTimeout: 4000,
         reconnectPeriod: 1000,
-        keepalive: 30, // Frequent keepalive for mobile browsers
+        keepalive: 30,
     });
 
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
@@ -141,7 +157,6 @@ const App: React.FC = () => {
       if (t === topic) {
         try {
           const data = JSON.parse(payload.toString());
-          
           if (data.type === 'typing') {
             if (data.sender === stateRef.current.currentUser?.username) return;
             setState(prev => ({
@@ -150,15 +165,11 @@ const App: React.FC = () => {
             }));
           } else {
             const msg = data.type === 'message' ? data.payload : data;
-            
             setState(prev => {
               if (prev.messages.some(m => m.id === msg.id)) return prev;
-              
-              // Audio feedback for received messages
               if (msg.sender !== prev.currentUser?.username) {
                 soundService.playReceive();
               }
-
               const newTyping = { ...prev.typingUsers };
               delete newTyping[msg.sender];
               return {
@@ -175,7 +186,6 @@ const App: React.FC = () => {
     });
 
     mqttClientRef.current = client;
-    // Fix: Wrapping client.end() in a block ensures the cleanup returns void.
     return () => { client.end(); };
   }, [state.currentZone?.id]);
 
@@ -248,22 +258,20 @@ const App: React.FC = () => {
       isInRange: true, distance: null, timeLeft: SESSION_DURATION_MS,
       typingUsers: {},
     });
+    setShowExpiryWarning(false);
+    warningShownRef.current = false;
   };
 
   const sendMessage = (text: string) => {
     if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
-    
     const msg: Message = {
       id: Math.random().toString(36).substr(2, 9),
       sender: state.currentUser.username,
       text,
       timestamp: Date.now()
     };
-
     const topic = `locuschat/v1/zones/${state.currentZone.id}`;
     mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }));
-    
-    // Audio feedback for sent message
     soundService.playSend();
   };
 
@@ -285,6 +293,13 @@ const App: React.FC = () => {
       />
       
       <main className="flex-1 relative overflow-hidden flex flex-col min-h-0 bg-[#0a0a0a]">
+        {showExpiryWarning && (
+          <ExpiryWarning 
+            onDismiss={() => setShowExpiryWarning(false)} 
+            onRestart={handleExit}
+          />
+        )}
+
         {!state.currentZone ? (
           <JoinScreen onJoin={handleJoin} invitedZone={invitedZone} />
         ) : (
