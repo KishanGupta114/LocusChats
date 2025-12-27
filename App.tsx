@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
 import { AppState, Zone, User, Message } from './types';
-import { RADIUS_KM, SESSION_DURATION_MS, ADJECTIVES, NOUNS, COLORS } from './constants';
+import { RADIUS_KM, SESSION_DURATION_MS, ADJECTIVES, NOUNS, COLORS, LOCATION_CHECK_INTERVAL_MS } from './constants';
 import { calculateDistance, getCurrentPosition } from './utils/location';
 import JoinScreen from './components/JoinScreen';
 import ChatRoom from './components/ChatRoom';
@@ -35,13 +35,9 @@ const App: React.FC = () => {
       const vv = window.visualViewport;
       if (!vv || !appRef.current) return;
       
-      // Calculate height based on visual viewport to account for keyboard
       appRef.current.style.height = `${vv.height}px`;
-      
-      // Offset translation is critical for iOS to prevent the "scroll into void" effect
       appRef.current.style.transform = `translateY(${vv.offsetTop}px)`;
 
-      // Force window scroll position to 0 to stop browser auto-shifting
       if (vv.offsetTop > 0 || window.scrollY > 0) {
         window.scrollTo(0, 0);
       }
@@ -57,6 +53,57 @@ const App: React.FC = () => {
       window.visualViewport?.removeEventListener('scroll', handleViewport);
     };
   }, []);
+
+  // Timer: Decrement timeLeft every second when in a zone
+  useEffect(() => {
+    if (!state.currentZone) return;
+
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const remaining = state.currentZone!.expiresAt - now;
+
+      if (remaining <= 0) {
+        handleExit();
+      } else {
+        setState(prev => ({ ...prev, timeLeft: remaining }));
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [state.currentZone]);
+
+  // Proximity: Re-check location periodically
+  useEffect(() => {
+    if (!state.currentZone) return;
+
+    const checkProximity = async () => {
+      try {
+        const pos = await getCurrentPosition();
+        const dist = calculateDistance(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          state.currentZone!.center.lat,
+          state.currentZone!.center.lng
+        );
+
+        const inRange = dist <= RADIUS_KM;
+        setState(prev => ({ 
+          ...prev, 
+          distance: dist,
+          isInRange: inRange 
+        }));
+
+        if (!inRange) {
+          // Range failure is handled by the overlay in the return JSX
+        }
+      } catch (err) {
+        console.error("Location re-check failed", err);
+      }
+    };
+
+    const proximityInterval = setInterval(checkProximity, LOCATION_CHECK_INTERVAL_MS);
+    return () => clearInterval(proximityInterval);
+  }, [state.currentZone]);
 
   // Cleanup stale typing indicators
   useEffect(() => {
@@ -149,19 +196,32 @@ const App: React.FC = () => {
       
       let zoneToUse: Zone;
 
-      if (invitedZone) {
-        const dist = calculateDistance(
-          pos.coords.latitude,
-          pos.coords.longitude,
-          invitedZone.center.lat,
-          invitedZone.center.lng
-        );
-
-        if (dist > RADIUS_KM) {
-          alert(`You are outside the 2km range (${dist.toFixed(2)}km away).`);
+      // Handle invite links if present in URL on mount
+      const searchParams = new URLSearchParams(window.location.search);
+      const zoneEncoded = searchParams.get('z');
+      
+      if (zoneEncoded) {
+        try {
+          const decoded = atob(zoneEncoded);
+          const [id, lat, lng, expiresAt] = decoded.split('|');
+          const zoneData: Zone = {
+            id,
+            center: { lat: parseFloat(lat), lng: parseFloat(lng) },
+            createdAt: now, // We treat the join time as new for TTL relative to local, but expiresAt is absolute
+            expiresAt: parseInt(expiresAt)
+          };
+          
+          const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, zoneData.center.lat, zoneData.center.lng);
+          if (dist <= RADIUS_KM) {
+            zoneToUse = zoneData;
+          } else {
+            alert(`You are too far from this zone (${dist.toFixed(2)}km).`);
+            return;
+          }
+        } catch (e) {
+          console.error("Invalid invite link");
           return;
         }
-        zoneToUse = invitedZone;
       } else {
         zoneToUse = {
           id: Math.random().toString(36).substr(2, 9),
@@ -215,7 +275,7 @@ const App: React.FC = () => {
       messages: [],
       isInRange: true,
       distance: null,
-      timeLeft: 0,
+      timeLeft: SESSION_DURATION_MS,
       typingUsers: {},
     });
     setInvitedZone(null);
