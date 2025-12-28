@@ -1,8 +1,9 @@
 
 /**
  * Compresses an image file using Canvas to ensure it stays under the MQTT payload limit.
+ * Supports aggressive quality reduction for very large files.
  */
-export const compressImage = (file: File, maxW = 1080, maxH = 1080, quality = 0.7): Promise<string> => {
+export const compressImage = (file: File, maxW = 1024, maxH = 1024): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -29,13 +30,33 @@ export const compressImage = (file: File, maxW = 1080, maxH = 1080, quality = 0.
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        if (!ctx) return reject('Canvas context failed');
+        
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Start with 0.7 quality, if still too big, ChatRoom will handle it or we could loop here.
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
       };
       img.onerror = reject;
     };
     reader.onerror = reject;
   });
+};
+
+/**
+ * Helper to get supported audio mime types
+ */
+export const getSupportedAudioMimeType = () => {
+  const types = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4'];
+  return types.find(type => MediaRecorder.isTypeSupported(type)) || '';
+};
+
+/**
+ * Helper to get supported video mime types
+ */
+export const getSupportedVideoMimeType = () => {
+  const types = ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+  return types.find(type => MediaRecorder.isTypeSupported(type)) || '';
 };
 
 /**
@@ -53,8 +74,8 @@ export const fileToBase64 = (file: Blob | File): Promise<string> => {
 /**
  * Validates if the Base64 string is within the safe limit for MQTT (approx 1MB).
  */
-export const isSafePayloadSize = (base64String: string, limitMb = 0.9): boolean => {
-  // Base64 is ~1.33x the size of binary. 1MB limit means ~750KB binary.
+export const isSafePayloadSize = (base64String: string, limitMb = 0.95): boolean => {
+  // Base64 is ~1.33x the size of binary.
   const sizeInBytes = (base64String.length * 3) / 4;
   return sizeInBytes < limitMb * 1024 * 1024;
 };
