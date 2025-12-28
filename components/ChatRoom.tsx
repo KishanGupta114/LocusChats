@@ -22,6 +22,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const [recordingTime, setRecordingTime] = useState(0);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [fullScreenMedia, setFullScreenMedia] = useState<string | null>(null);
+  const [showCameraSelector, setShowCameraSelector] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -202,6 +203,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   };
 
   const startVideoRecording = async (mode = facingMode) => {
+    setShowCameraSelector(false);
     try {
       cleanupStream();
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -214,6 +216,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         audio: true 
       });
       streamRef.current = stream;
+      setFacingMode(mode);
       
       const mimeType = getSupportedVideoMimeType();
       const recorder = new MediaRecorder(stream, { 
@@ -407,6 +410,35 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         )}
       </div>
 
+      {/* Camera Selection Overlay */}
+      {showCameraSelector && (
+        <div className="absolute inset-0 z-[120] bg-black/60 backdrop-blur-md flex items-end sm:items-center justify-center p-6 animate-in fade-in duration-200">
+           <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center animate-in slide-in-from-bottom duration-300">
+              <h2 className="text-sm font-black uppercase tracking-[0.3em] mb-8 text-white">Select Sensor</h2>
+              <div className="flex flex-col gap-4">
+                <button 
+                  onClick={() => startVideoRecording('user')}
+                  className="w-full py-5 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px] shadow-2xl active:scale-95 transition-all"
+                >
+                  Front Camera
+                </button>
+                <button 
+                  onClick={() => startVideoRecording('environment')}
+                  className="w-full py-5 bg-white/5 text-white border border-white/10 font-black rounded-2xl uppercase tracking-widest text-[10px] active:scale-95 transition-all"
+                >
+                  Back Camera
+                </button>
+                <button 
+                  onClick={() => setShowCameraSelector(false)}
+                  className="w-full py-3 text-gray-500 font-bold uppercase tracking-widest text-[9px] mt-2"
+                >
+                  Cancel
+                </button>
+              </div>
+           </div>
+        </div>
+      )}
+
       {/* In-App Image Lightbox */}
       {fullScreenMedia && (
         <div className="absolute inset-0 z-[200] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
@@ -563,7 +595,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m14 0v1a7 7 0 01-14 0v-1m14 0a7 7 0 00-7-7 7 7 0 00-7 7m7 5V4m0 0L8 8m4-4l4 4" /></svg>
                   </button>
 
-                  <button onClick={() => startVideoRecording('user')} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all active:scale-90">
+                  <button onClick={() => setShowCameraSelector(true)} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all active:scale-90">
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2-2v8a2 2 0 002 2z" /></svg>
                   </button>
                 </div>
