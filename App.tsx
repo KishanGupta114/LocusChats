@@ -16,6 +16,7 @@ import ChatRoom from './components/ChatRoom';
 import Header from './components/Header';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
+const TYPING_EXPIRY_MS = 4000;
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
@@ -55,7 +56,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Session timer logic - Ensuring time remains accurate
+  // Session timer logic
   useEffect(() => {
     if (!state.currentZone) return;
 
@@ -66,7 +67,6 @@ const App: React.FC = () => {
         if (remaining <= 0) {
           clearInterval(interval);
           alert("Session expired. This zone has been decommissioned.");
-          // Trigger exit next tick to avoid state conflicts
           setTimeout(handleExit, 0);
           return { ...prev, timeLeft: 0 };
         }
@@ -76,6 +76,28 @@ const App: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [state.currentZone?.id]);
+
+  // Typing indicator cleanup logic
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setState(prev => {
+        let changed = false;
+        const newTyping = { ...prev.typingUsers };
+        
+        Object.keys(newTyping).forEach(username => {
+          if (now - newTyping[username] > TYPING_EXPIRY_MS) {
+            delete newTyping[username];
+            changed = true;
+          }
+        });
+
+        return changed ? { ...prev, typingUsers: newTyping } : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Main Discovery & Room Connection
   useEffect(() => {
@@ -144,16 +166,28 @@ const App: React.FC = () => {
         const msg = data.payload;
         setState(prev => {
           if (prev.messages.some(m => m.id === msg.id)) return prev;
+          
+          // Clear typing status immediately when a message is received
+          const newTyping = { ...prev.typingUsers };
+          delete newTyping[msg.sender];
+
           if (msg.sender !== prev.currentUser?.username) {
             soundService.playReceive();
             setUnreadCount(c => c + 1);
           }
-          return { ...prev, messages: [...prev.messages, msg] };
+          return { 
+            ...prev, 
+            messages: [...prev.messages, msg],
+            typingUsers: newTyping 
+          };
         });
         break;
       case 'typing':
         if (data.sender === stateRef.current.currentUser?.username) return;
-        setState(prev => ({ ...prev, typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } }));
+        setState(prev => ({ 
+          ...prev, 
+          typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } 
+        }));
         break;
       case 'history_req':
         if (stateRef.current.messages.length > 0) {
@@ -249,7 +283,6 @@ const App: React.FC = () => {
     setRoomPassword('');
     setUnreadCount(0);
     setShowExitConfirm(false);
-    // Remove query params on exit
     const url = new URL(window.location.href);
     url.searchParams.delete('zoneId');
     window.history.replaceState({}, '', url.toString());
@@ -268,10 +301,8 @@ const App: React.FC = () => {
             url: shareUrl,
           });
         } catch (err: any) {
-          // Gracefully handle cancellation and other errors
           if (err.name !== 'AbortError') {
             console.error('Share failed:', err);
-            // Fallback to clipboard if share fails for non-cancellation reasons
             navigator.clipboard.writeText(shareUrl);
             alert("Share failed. Zone link copied to clipboard instead.");
           }
