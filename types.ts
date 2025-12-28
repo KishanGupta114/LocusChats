@@ -1,5 +1,6 @@
 
 export type MediaType = 'text' | 'image' | 'video' | 'audio';
+export type RoomType = 'public' | 'private';
 
 export interface Message {
   id: string;
@@ -8,12 +9,7 @@ export interface Message {
   timestamp: number;
   isSystem?: boolean;
   type: MediaType;
-  mediaData?: string; // Base64 for ephemeral transport
-}
-
-export interface TypingUpdate {
-  username: string;
-  timestamp: number;
+  mediaData?: string; 
 }
 
 export interface User {
@@ -23,12 +19,16 @@ export interface User {
 
 export interface Zone {
   id: string;
+  name: string;
+  type: RoomType;
+  passwordHash?: string; // For verification before joining
   center: {
     lat: number;
     lng: number;
   };
   createdAt: number;
   expiresAt: number;
+  userCount: number;
 }
 
 export interface AppState {
@@ -39,4 +39,5 @@ export interface AppState {
   distance: number | null;
   timeLeft: number;
   typingUsers: Record<string, number>;
+  availableRooms: Zone[];
 }
