@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Message, User, MediaType } from '../types';
 import { moderateContent } from '../services/geminiService';
 import { MAX_VIDEO_DURATION_S } from '../constants';
+import { compressImage, fileToBase64, isSafePayloadSize } from '../utils/media';
 
 interface ChatRoomProps {
   messages: Message[];
@@ -17,6 +18,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const [isModerating, setIsModerating] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [processingMedia, setProcessingMedia] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -40,89 +42,96 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     scrollToBottom();
   }, [messages, activeTypingList.length]);
 
-  const adjustTextareaHeight = () => {
-    const textarea = textAreaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      const newHeight = Math.min(textarea.scrollHeight, 180);
-      textarea.style.height = `${newHeight}px`;
-      textarea.style.overflowY = newHeight >= 180 ? 'auto' : 'hidden';
-      scrollToBottom('auto');
-    }
-  };
-
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = error => reject(error);
-    });
-  };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type.startsWith('video/')) {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.onloadedmetadata = async () => {
-        window.URL.revokeObjectURL(video.src);
-        if (video.duration > MAX_VIDEO_DURATION_S) {
-          alert(`Video must be under ${MAX_VIDEO_DURATION_S} seconds.`);
-        } else {
-          processAndSendMedia(file, 'video');
-        }
-      };
-      video.src = URL.createObjectURL(file);
-    } else if (file.type.startsWith('image/')) {
-      processAndSendMedia(file, 'image');
-    }
-    
-    // Reset input
-    e.target.value = '';
-  };
+    setProcessingMedia(true);
 
-  const processAndSendMedia = async (file: File | Blob, type: MediaType) => {
-    setIsModerating(true);
     try {
-      const base64 = await fileToBase64(file as File);
-      // For images, we can optionally moderate the prompt or description, 
-      // but here we just flag it as "media attached"
-      onSendMessage('', type, base64);
+      if (file.type.startsWith('video/')) {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.onloadedmetadata = async () => {
+          window.URL.revokeObjectURL(video.src);
+          if (video.duration > MAX_VIDEO_DURATION_S) {
+            alert(`Video exceeds ${MAX_VIDEO_DURATION_S}s limit.`);
+            setProcessingMedia(false);
+          } else {
+            const base64 = await fileToBase64(file);
+            if (!isSafePayloadSize(base64)) {
+              alert("Video file size is too large for the ephemeral tunnel. Try a lower resolution.");
+              setProcessingMedia(false);
+            } else {
+              onSendMessage('', 'video', base64);
+              setProcessingMedia(false);
+            }
+          }
+        };
+        video.src = URL.createObjectURL(file);
+      } else if (file.type.startsWith('image/')) {
+        const compressedBase64 = await compressImage(file);
+        if (!isSafePayloadSize(compressedBase64)) {
+          alert("Image is too large even after compression.");
+        } else {
+          onSendMessage('', 'image', compressedBase64);
+        }
+        setProcessingMedia(false);
+      }
     } catch (err) {
       console.error("Media processing failed", err);
-    } finally {
-      setIsModerating(false);
+      alert("Failed to process media.");
+      setProcessingMedia(false);
     }
+    
+    e.target.value = '';
   };
 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
-      recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
-      recorder.onstop = () => {
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      
+      recorder.onstop = async () => {
+        setProcessingMedia(true);
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        processAndSendMedia(audioBlob as File, 'audio');
+        const base64 = await fileToBase64(audioBlob);
+        
+        if (isSafePayloadSize(base64)) {
+          onSendMessage('', 'audio', base64);
+        } else {
+          alert("Audio recording too long to transmit.");
+        }
+        
+        setProcessingMedia(false);
         stream.getTracks().forEach(track => track.stop());
       };
 
       recorder.start();
       setIsRecording(true);
       setRecordingTime(0);
-      timerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => {
+          if (prev >= 59) {
+            stopRecording();
+            return 60;
+          }
+          return prev + 1;
+        });
+      }, 1000);
     } catch (err) {
-      alert("Microphone access denied.");
+      alert("Microphone access is required for voice notes.");
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       clearInterval(timerRef.current);
@@ -131,7 +140,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
   const handleSubmit = async () => {
     const text = input.trim();
-    if (!text || isModerating) return;
+    if (!text || isModerating || processingMedia) return;
 
     setIsModerating(true);
     const check = await moderateContent(text);
@@ -183,26 +192,32 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-2xl transition-all ${
                 isMe ? 'bubble-me rounded-tr-none' : 'bubble-them text-gray-200 rounded-tl-none'
               }`}>
-                {msg.type === 'text' && <div className="px-4 py-3 text-[15px]">{msg.text}</div>}
+                {msg.type === 'text' && <div className="px-4 py-3 text-[15px] leading-relaxed">{msg.text}</div>}
                 
                 {msg.type === 'image' && (
-                  <img 
-                    src={msg.mediaData} 
-                    alt="Uploaded" 
-                    className="max-h-80 w-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() => window.open(msg.mediaData, '_blank')}
-                  />
+                  <div className="bg-black/20 min-h-[100px] flex items-center justify-center">
+                    <img 
+                      src={msg.mediaData} 
+                      alt="Shared content" 
+                      className="max-h-[70vh] w-auto object-contain cursor-pointer"
+                      onClick={() => {
+                        const win = window.open();
+                        win?.document.write(`<img src="${msg.mediaData}" style="max-width:100%;height:auto;background:#000;">`);
+                      }}
+                    />
+                  </div>
                 )}
                 
                 {msg.type === 'video' && (
-                  <video controls className="max-h-80 w-full bg-black">
+                  <video controls className="max-h-[70vh] w-full bg-black">
                     <source src={msg.mediaData} type="video/mp4" />
+                    Your browser does not support the video tag.
                   </video>
                 )}
                 
                 {msg.type === 'audio' && (
-                  <div className="px-3 py-2 min-w-[200px]">
-                    <audio controls className="w-full h-8 scale-90">
+                  <div className="px-4 py-3 min-w-[240px] flex items-center bg-white/5">
+                    <audio controls className="w-full h-8 scale-95 opacity-80 invert">
                       <source src={msg.mediaData} type="audio/webm" />
                     </audio>
                   </div>
@@ -226,28 +241,32 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         )}
       </div>
 
-      {/* Media Input Area */}
+      {/* Input Tray */}
       <div className="shrink-0 px-4 py-4 border-t border-white/5 bg-[#0a0a0a] z-50">
         <div className="max-w-4xl mx-auto flex flex-col gap-3">
           
-          {isRecording && (
-            <div className="flex items-center justify-between bg-red-500/10 border border-red-500/20 rounded-2xl p-3 animate-pulse">
+          {(isRecording || processingMedia) && (
+            <div className={`flex items-center justify-between border rounded-2xl p-3 animate-pulse ${isRecording ? 'bg-red-500/10 border-red-500/20' : 'bg-blue-500/10 border-blue-500/20'}`}>
               <div className="flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                <span className="text-xs font-black uppercase tracking-widest text-red-500">Recording Voice Note...</span>
+                <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500' : 'bg-blue-500'}`}></div>
+                <span className={`text-[10px] font-black uppercase tracking-widest ${isRecording ? 'text-red-500' : 'text-blue-500'}`}>
+                  {isRecording ? 'Recording Secure Audio...' : 'Encrypting Payload...'}
+                </span>
               </div>
-              <span className="mono text-sm font-bold text-red-500">{Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}</span>
+              {isRecording && <span className="mono text-xs font-bold text-red-500">{recordingTime}s / 60s</span>}
             </div>
           )}
 
-          <div className="relative bg-[#111] border border-white/5 rounded-3xl flex flex-col overflow-hidden focus-within:border-white/10 transition-all">
+          <div className="relative bg-[#111] border border-white/5 rounded-[2rem] flex flex-col overflow-hidden focus-within:border-white/20 transition-all p-1.5">
             <textarea 
               ref={textAreaRef}
               rows={1}
               value={input}
               onChange={(e) => {
                 setInput(e.target.value);
-                adjustTextareaHeight();
+                const t = e.target;
+                t.style.height = 'auto';
+                t.style.height = `${Math.min(t.scrollHeight, 180)}px`;
                 if (e.target.value.length > 0) onTyping();
               }}
               onKeyDown={(e) => {
@@ -256,25 +275,25 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   handleSubmit();
                 }
               }}
-              placeholder={isModerating ? "Analyzing payload..." : "Type something..."}
-              disabled={isModerating || isRecording}
-              className="w-full bg-transparent px-5 py-4 focus:outline-none placeholder:text-gray-600 text-[16px] resize-none leading-relaxed appearance-none text-white overflow-hidden"
+              placeholder={isModerating ? "Verifying..." : "Type something..."}
+              disabled={isModerating || isRecording || processingMedia}
+              className="w-full bg-transparent px-4 py-3 focus:outline-none placeholder:text-gray-600 text-[16px] resize-none leading-relaxed text-white overflow-hidden"
             />
             
-            <div className="flex items-center justify-between px-3 pb-3">
+            <div className="flex items-center justify-between px-2 pb-1.5">
               <div className="flex items-center gap-1">
                 <input 
                   type="file" 
                   ref={fileInputRef} 
                   className="hidden" 
-                  accept="image/*,video/*" 
+                  accept="image/jpeg,image/png,video/mp4,video/quicktime" 
                   onChange={handleFileUpload}
                 />
                 
                 <button 
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-2 text-gray-500 hover:text-white transition-colors hover:bg-white/5 rounded-full"
-                  title="Upload Image/Video"
+                  disabled={isRecording || processingMedia}
+                  className="p-2.5 text-gray-500 hover:text-white transition-colors hover:bg-white/5 rounded-full disabled:opacity-30"
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -284,10 +303,10 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                 <button 
                   onMouseDown={startRecording}
                   onMouseUp={stopRecording}
-                  onTouchStart={startRecording}
-                  onTouchEnd={stopRecording}
-                  className={`p-2 transition-all rounded-full ${isRecording ? 'text-red-500 bg-red-500/10 scale-125' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}
-                  title="Hold to Record Voice"
+                  onTouchStart={(e) => { e.preventDefault(); startRecording(); }}
+                  onTouchEnd={(e) => { e.preventDefault(); stopRecording(); }}
+                  disabled={processingMedia}
+                  className={`p-2.5 transition-all rounded-full ${isRecording ? 'text-red-500 bg-red-500/10 scale-110 shadow-lg shadow-red-500/20' : 'text-gray-500 hover:text-white hover:bg-white/5 disabled:opacity-30'}`}
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m14 0v1a7 7 0 01-14 0v-1m14 0a7 7 0 00-7-7 7 7 0 00-7 7m7 5V4m0 0L8 8m4-4l4 4" />
@@ -297,9 +316,9 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
               <button 
                 onClick={handleSubmit}
-                disabled={!input.trim() || isModerating}
+                disabled={!input.trim() || isModerating || processingMedia}
                 className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${
-                  input.trim() && !isModerating ? 'bg-white text-black scale-100 shadow-xl' : 'bg-white/5 text-gray-700 scale-90'
+                  input.trim() && !isModerating ? 'bg-white text-black scale-100 shadow-xl' : 'bg-white/5 text-gray-700 scale-90 opacity-50'
                 }`}
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
