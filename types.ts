@@ -1,10 +1,14 @@
 
+export type MediaType = 'text' | 'image' | 'video' | 'audio';
+
 export interface Message {
   id: string;
   sender: string;
-  text: string;
+  text?: string;
   timestamp: number;
   isSystem?: boolean;
+  type: MediaType;
+  mediaData?: string; // Base64 for ephemeral transport
 }
 
 export interface TypingUpdate {

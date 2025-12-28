@@ -1,36 +1,33 @@
 
-# Locus Chat: Architecture & Privacy Design
+# Locus Chat: v2 Ephemeral Media Architecture
 
-## 1. System Overview
-Locus Chat is an **ephemeral proximity-based communication layer**. It avoids traditional server-side state persistence in favor of memory-only volatility.
+## 1. System Redesign
+Locus Chat v2 upgrades the ephemeral experience with rich media while maintaining a zero-footprint backend.
 
-### Components
-- **Client (React/TS)**: Handles UI, GPS logic, and local data destruction.
-- **Transport (Current)**: `BroadcastChannel` for same-device multi-tab testing.
-- **Transport (Production Scale)**: Ephemeral WebSocket Relay (e.g., Ably/Pusher) or WebRTC P2P.
-- **Privacy Engine**: 
-    - Geofencing: Constant <2km validation.
-    - Identity: Random user generation (Adjective + Noun).
-    - TTL (Time-To-Live): 60-minute hard expiry.
+### Core Upgrades
+- **Radius Expansion**: Geofencing increased to 10km.
+- **Session Duration**: Time-To-Live (TTL) increased to 120 minutes.
+- **Media Support**: 
+    - **Audio**: Real-time recording via Web Audio API.
+    - **Video**: 60-second hardware-enforced capture.
+    - **Images**: Volatile gallery view.
 
-## 2. Data Flow
-1. **Entrance**: User -> Permission -> GPS Fetch -> Zone Discovery/Creation.
-2. **Sharing**: Zone metadata (ID, Center, Expiry) is encoded into a Base64 URL parameter.
-3. **Session**: Message -> Transport -> Broadcast to peers in Zone.
-4. **Purge Events**:
-    - **Distance Exit**: `dist > 2km` -> Trigger `Session.Wipe()`.
-    - **Time Expire**: `now > expiresAt` -> Trigger `Session.Wipe()`.
-    - **Client Close**: Unmount -> Volatile memory clear.
+## 2. Media Lifecycle (The "Volatile" Model)
+1. **Source**: User captures/selects media.
+2. **Buffer**: File is converted to an optimized Base64 string (client-side).
+3. **Transport**: Transmitted via WSS/MQTT as a "Single-Use Payload".
+4. **Consumption**: Peer renders data from RAM.
+5. **Purge**: 
+    - Manual: `revokedObjectURL` and RAM clearing on message removal.
+    - Automatic: App unmount, radius breach, or session timeout clears all local states.
 
-## 3. Privacy Risk Analysis
-| Risk | Mitigation |
-|------|------------|
-| **Location Tracking** | Coordinates are used only for distance calculation (client-side) and never sent to a persistent DB. |
-| **Abuse/Spam** | AI-driven lightweight moderation (Gemini) checks content without profiling the user. |
-| **Message Recovery** | Messages exist only in RAM. No database persistence exists at any layer. |
+## 3. Advanced Security
+- **Memory-Only State**: All media exists in the application's JavaScript heap; no local storage or cookies are used.
+- **Broker-Level Ephemerality**: Using a "Clean Session" MQTT configuration prevents message storage on the broker.
+- **Location Shielding**: Lat/Lng are never sent to the broker; only the Zone ID (a random hash) is used for topic subscription.
 
-## 4. Deployment Instructions
-1. **GitHub**: Push code to a private or public repository.
-2. **Vercel/Netlify**: Connect repository for automated HTTPS deployment (Required for Geolocation).
-3. **API Key**: Configure `API_KEY` in the hosting provider's Environment Variables.
-4. **HTTPS**: Ensure the site is accessed via `https://` or location permissions will be denied by the browser.
+## 4. Technical Specs
+- **Video Max**: 60 seconds (H.264/WebM).
+- **Audio Max**: 60 seconds (Opus/WebM).
+- **Image Max**: 1MB (optimized via canvas before send).
+- **Transport Layer**: EMQX Broker (WebSocket Secure).

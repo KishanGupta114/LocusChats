@@ -1,29 +1,36 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Message, User } from '../types';
+import { Message, User, MediaType } from '../types';
 import { moderateContent } from '../services/geminiService';
+import { MAX_VIDEO_DURATION_S } from '../constants';
 
 interface ChatRoomProps {
   messages: Message[];
   currentUser: User | null;
   typingUsers: Record<string, number>;
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string, type: MediaType, mediaData?: string) => void;
   onTyping: () => void;
 }
 
 const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers, onSendMessage, onTyping }) => {
   const [input, setInput] = useState('');
   const [isModerating, setIsModerating] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<any>(null);
 
   const activeTypingList = Object.keys(typingUsers).filter(u => u !== currentUser?.username);
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     if (scrollRef.current) {
-      const scrollHeight = scrollRef.current.scrollHeight;
       scrollRef.current.scrollTo({
-        top: scrollHeight,
+        top: scrollRef.current.scrollHeight,
         behavior
       });
     }
@@ -44,6 +51,84 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     }
   };
 
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = error => reject(error);
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type.startsWith('video/')) {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = async () => {
+        window.URL.revokeObjectURL(video.src);
+        if (video.duration > MAX_VIDEO_DURATION_S) {
+          alert(`Video must be under ${MAX_VIDEO_DURATION_S} seconds.`);
+        } else {
+          processAndSendMedia(file, 'video');
+        }
+      };
+      video.src = URL.createObjectURL(file);
+    } else if (file.type.startsWith('image/')) {
+      processAndSendMedia(file, 'image');
+    }
+    
+    // Reset input
+    e.target.value = '';
+  };
+
+  const processAndSendMedia = async (file: File | Blob, type: MediaType) => {
+    setIsModerating(true);
+    try {
+      const base64 = await fileToBase64(file as File);
+      // For images, we can optionally moderate the prompt or description, 
+      // but here we just flag it as "media attached"
+      onSendMessage('', type, base64);
+    } catch (err) {
+      console.error("Media processing failed", err);
+    } finally {
+      setIsModerating(false);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        processAndSendMedia(audioBlob as File, 'audio');
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
+    } catch (err) {
+      alert("Microphone access denied.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      clearInterval(timerRef.current);
+    }
+  };
+
   const handleSubmit = async () => {
     const text = input.trim();
     if (!text || isModerating) return;
@@ -53,28 +138,23 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     setIsModerating(false);
 
     if (check.safe) {
-      onSendMessage(text);
+      onSendMessage(text, 'text');
       setInput('');
-      
       if (textAreaRef.current) {
         textAreaRef.current.style.height = 'auto';
-        textAreaRef.current.style.overflowY = 'hidden';
         textAreaRef.current.focus(); 
       }
-      
       setTimeout(() => scrollToBottom('smooth'), 50);
     } else {
-      alert(`Message blocked: ${check.reason || 'Harmful content detected'}`);
+      alert(`Blocked: ${check.reason || 'Safety violation'}`);
     }
   };
 
   return (
     <div className="flex flex-col h-full bg-[#0a0a0a] overflow-hidden relative">
-      {/* Message Area */}
       <div 
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 py-4 sm:px-8 space-y-6 no-scrollbar"
-        style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
       >
         {messages.map((msg, idx) => {
           const isMe = msg.sender === currentUser?.username;
@@ -83,7 +163,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           if (msg.isSystem) {
             return (
               <div key={msg.id} className="flex justify-center my-6">
-                <span className="text-[10px] mono uppercase tracking-[0.25em] text-gray-500 bg-white/5 px-4 py-1.5 rounded-full border border-white/5 font-semibold">
+                <span className="text-[9px] mono uppercase tracking-[0.3em] text-gray-600 font-bold bg-white/[0.03] px-4 py-1 rounded-full">
                   {msg.text}
                 </span>
               </div>
@@ -91,69 +171,84 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           }
 
           return (
-            <div 
-              key={msg.id} 
-              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message`}
-            >
+            <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message`}>
               {showSender && (
-                <div className={`flex items-baseline gap-2 mb-2 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
-                  <span className={`text-[10px] font-black uppercase tracking-wider ${isMe ? 'text-white' : 'text-gray-500'}`}>
+                <div className={`flex items-baseline gap-2 mb-1 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
+                  <span className={`text-[10px] font-black uppercase tracking-widest ${isMe ? 'text-white' : 'text-gray-500'}`}>
                     {msg.sender}
-                  </span>
-                  <span className="text-[9px] text-gray-700 font-bold mono">
-                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
               )}
-              <div 
-                className={`min-w-[40px] max-w-[88%] px-4 py-3 rounded-2xl text-[15px] leading-relaxed break-words shadow-2xl transition-all ${
-                  isMe 
-                    ? 'bubble-me rounded-tr-none' 
-                    : 'bubble-them text-gray-200 rounded-tl-none'
-                }`}
-              >
-                {msg.text}
+              
+              <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-2xl transition-all ${
+                isMe ? 'bubble-me rounded-tr-none' : 'bubble-them text-gray-200 rounded-tl-none'
+              }`}>
+                {msg.type === 'text' && <div className="px-4 py-3 text-[15px]">{msg.text}</div>}
+                
+                {msg.type === 'image' && (
+                  <img 
+                    src={msg.mediaData} 
+                    alt="Uploaded" 
+                    className="max-h-80 w-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => window.open(msg.mediaData, '_blank')}
+                  />
+                )}
+                
+                {msg.type === 'video' && (
+                  <video controls className="max-h-80 w-full bg-black">
+                    <source src={msg.mediaData} type="video/mp4" />
+                  </video>
+                )}
+                
+                {msg.type === 'audio' && (
+                  <div className="px-3 py-2 min-w-[200px]">
+                    <audio controls className="w-full h-8 scale-90">
+                      <source src={msg.mediaData} type="audio/webm" />
+                    </audio>
+                  </div>
+                )}
               </div>
+              <span className="text-[8px] text-gray-700 font-bold mono mt-1 px-1">
+                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
             </div>
           );
         })}
         
         {activeTypingList.length > 0 && (
           <div className="flex items-start animate-message">
-            <div className="flex flex-col items-start">
-               <div className="flex items-baseline gap-2 mb-2 px-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
-                    {activeTypingList.length === 1 ? activeTypingList[0] : `${activeTypingList.length} people`}
-                  </span>
-                </div>
-                <div className="bg-white/5 border border-white/10 px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-1">
-                  <div className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce [animation-delay:-0.3s]"></div>
-                  <div className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce [animation-delay:-0.15s]"></div>
-                  <div className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce"></div>
-                </div>
+            <div className="bg-white/5 border border-white/10 px-3 py-2 rounded-2xl rounded-tl-none flex items-center gap-1">
+              <div className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"></div>
+              <div className="w-1 h-1 rounded-full bg-gray-500 animate-bounce [animation-delay:0.2s]"></div>
+              <div className="w-1 h-1 rounded-full bg-gray-500 animate-bounce [animation-delay:0.4s]"></div>
             </div>
           </div>
         )}
-        <div className="h-4"></div>
       </div>
 
-      {/* Modern High-Fidelity Input Area */}
-      <div className="shrink-0 px-4 py-3 sm:py-6 border-t border-white/5 bg-[#0a0a0a] pb-[max(1.5rem,env(safe-area-inset-bottom, 1.5rem))]">
-        <div className="max-w-4xl mx-auto">
-          <div className={`relative bg-[#1a1a1a] border rounded-[1.8rem] transition-all flex flex-col overflow-hidden p-2 ${isModerating ? 'border-white/20' : 'border-white/5 focus-within:border-white/20'}`}>
-            
-            {/* Textarea Section */}
+      {/* Media Input Area */}
+      <div className="shrink-0 px-4 py-4 border-t border-white/5 bg-[#0a0a0a] z-50">
+        <div className="max-w-4xl mx-auto flex flex-col gap-3">
+          
+          {isRecording && (
+            <div className="flex items-center justify-between bg-red-500/10 border border-red-500/20 rounded-2xl p-3 animate-pulse">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                <span className="text-xs font-black uppercase tracking-widest text-red-500">Recording Voice Note...</span>
+              </div>
+              <span className="mono text-sm font-bold text-red-500">{Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}</span>
+            </div>
+          )}
+
+          <div className="relative bg-[#111] border border-white/5 rounded-3xl flex flex-col overflow-hidden focus-within:border-white/10 transition-all">
             <textarea 
               ref={textAreaRef}
               rows={1}
               value={input}
-              enterKeyHint="send"
               onChange={(e) => {
                 setInput(e.target.value);
                 adjustTextareaHeight();
-                if (e.target.value.trim().length > 0) {
-                  onTyping();
-                }
+                if (e.target.value.length > 0) onTyping();
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -161,80 +256,58 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   handleSubmit();
                 }
               }}
-              placeholder={isModerating ? "Transmitting..." : "Type something..."}
-              disabled={isModerating}
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck="false"
-              className="w-full bg-transparent px-4 py-2 mt-1 focus:outline-none transition-all placeholder:text-gray-500 text-[16px] resize-none max-h-[180px] block leading-relaxed appearance-none text-white overflow-hidden"
-              style={{ height: 'auto' }}
+              placeholder={isModerating ? "Analyzing payload..." : "Type something..."}
+              disabled={isModerating || isRecording}
+              className="w-full bg-transparent px-5 py-4 focus:outline-none placeholder:text-gray-600 text-[16px] resize-none leading-relaxed appearance-none text-white overflow-hidden"
             />
             
-            {/* Bottom Utility Bar */}
-            <div className="flex items-center justify-between px-2 pb-1.5 pt-1">
-              {/* Left Spacer or additional icons could go here */}
-              <div></div>
-
-              {/* Icon Tray (Matches Image) */}
-              <div className="flex items-center gap-3">
-                {/* Scribble/Pencil Icon */}
-                <button type="button" className="p-2 text-gray-500 hover:text-white transition-colors">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
-                    <path d="m15 5 4 4" />
-                  </svg>
-                </button>
-
-                {/* Microphone Icon */}
-                <button type="button" className="p-2 text-gray-500 hover:text-white transition-colors">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                    <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                    <line x1="12" y1="19" x2="12" y2="22" />
-                  </svg>
-                </button>
-
-                {/* Plus/Add Icon */}
-                <button type="button" className="p-2 text-gray-500 hover:text-white transition-colors">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="16" />
-                    <line x1="8" y1="12" x2="16" y2="12" />
-                  </svg>
-                </button>
-
-                {/* Send Button (Circular with Arrow) */}
+            <div className="flex items-center justify-between px-3 pb-3">
+              <div className="flex items-center gap-1">
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  className="hidden" 
+                  accept="image/*,video/*" 
+                  onChange={handleFileUpload}
+                />
+                
                 <button 
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={!input.trim() || isModerating}
-                  className={`p-2.5 rounded-full transition-all duration-300 ${
-                    input.trim() && !isModerating 
-                    ? 'bg-white text-black scale-100 shadow-lg' 
-                    : 'bg-white/5 text-gray-700 scale-95 opacity-50'
-                  }`}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2 text-gray-500 hover:text-white transition-colors hover:bg-white/5 rounded-full"
+                  title="Upload Image/Video"
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="m5 12 7-7 7 7" />
-                    <path d="M12 19V5" />
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </button>
+
+                <button 
+                  onMouseDown={startRecording}
+                  onMouseUp={stopRecording}
+                  onTouchStart={startRecording}
+                  onTouchEnd={stopRecording}
+                  className={`p-2 transition-all rounded-full ${isRecording ? 'text-red-500 bg-red-500/10 scale-125' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}
+                  title="Hold to Record Voice"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m14 0v1a7 7 0 01-14 0v-1m14 0a7 7 0 00-7-7 7 7 0 00-7 7m7 5V4m0 0L8 8m4-4l4 4" />
                   </svg>
                 </button>
               </div>
-            </div>
 
-            {/* Subtle Moderation Indicator Overlay */}
-            {isModerating && (
-              <div className="absolute inset-0 bg-black/10 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
-                <div className="w-full h-1 absolute bottom-0 bg-white/20 overflow-hidden">
-                  <div className="w-1/3 h-full bg-white animate-loading-bar"></div>
-                </div>
-              </div>
-            )}
+              <button 
+                onClick={handleSubmit}
+                disabled={!input.trim() || isModerating}
+                className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${
+                  input.trim() && !isModerating ? 'bg-white text-black scale-100 shadow-xl' : 'bg-white/5 text-gray-700 scale-90'
+                }`}
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
           </div>
-        </div>
-        
-        <div className="mt-4 flex items-center justify-center gap-6 opacity-30 select-none">
-            <span className="text-[7px] text-gray-500 mono uppercase tracking-[0.5em] font-black italic">End-to-End Tunnel</span>
         </div>
       </div>
     </div>

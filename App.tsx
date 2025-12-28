@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
-import { AppState, Zone, User, Message } from './types';
+import { AppState, Zone, User, Message, MediaType } from './types';
 import { RADIUS_KM, SESSION_DURATION_MS, ADJECTIVES, NOUNS, COLORS, LOCATION_CHECK_INTERVAL_MS } from './constants';
 import { calculateDistance, getCurrentPosition } from './utils/location';
 import { soundService } from './services/soundService';
@@ -35,67 +35,50 @@ const App: React.FC = () => {
     stateRef.current = state;
   }, [state]);
 
-  // Reset warning ref when zone changes
   useEffect(() => {
     warningShownRef.current = false;
     setShowExpiryWarning(false);
   }, [state.currentZone?.id]);
 
-  // Robust Viewport Management for Mobile Keyboards
   useEffect(() => {
     const handleViewport = () => {
       const vv = window.visualViewport;
       if (!vv || !appRef.current) return;
-      
       appRef.current.style.height = `${vv.height}px`;
       appRef.current.style.transform = `translateY(${vv.offsetTop}px)`;
-
-      if (vv.offsetTop > 0 || window.scrollY > 0) {
-        window.scrollTo(0, 0);
-      }
+      if (vv.offsetTop > 0 || window.scrollY > 0) window.scrollTo(0, 0);
     };
-
     window.visualViewport?.addEventListener('resize', handleViewport);
     window.visualViewport?.addEventListener('scroll', handleViewport);
     handleViewport();
-
     return () => {
       window.visualViewport?.removeEventListener('resize', handleViewport);
       window.visualViewport?.removeEventListener('scroll', handleViewport);
     };
   }, []);
 
-  // Reliability: Visibility handling to refresh connection
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && mqttClientRef.current) {
-        if (!mqttClientRef.current.connected) {
-          mqttClientRef.current.reconnect();
-        }
+        if (!mqttClientRef.current.connected) mqttClientRef.current.reconnect();
       }
     };
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  // Timer
   useEffect(() => {
     if (!state.currentZone) return;
     const timer = setInterval(() => {
       const now = Date.now();
       const remaining = state.currentZone!.expiresAt - now;
-      
       if (remaining <= 0) {
         handleExit();
       } else {
         setState(prev => ({ ...prev, timeLeft: remaining }));
-        
-        // Trigger 5-minute warning
         if (remaining <= 300000 && !warningShownRef.current) {
           setShowExpiryWarning(true);
           warningShownRef.current = true;
-          // Subtly notify with receive sound to grab attention
           soundService.playReceive();
         }
       }
@@ -103,7 +86,6 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [state.currentZone]);
 
-  // Proximity Check
   useEffect(() => {
     if (!state.currentZone) return;
     const proximityInterval = setInterval(async () => {
@@ -119,7 +101,6 @@ const App: React.FC = () => {
     return () => clearInterval(proximityInterval);
   }, [state.currentZone]);
 
-  // MQTT Connection Management
   useEffect(() => {
     if (!state.currentZone) {
       if (mqttClientRef.current) {
@@ -133,25 +114,20 @@ const App: React.FC = () => {
     const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
         clientId: 'locus_' + Math.random().toString(16).substr(2, 8),
         clean: true,
-        connectTimeout: 4000,
-        reconnectPeriod: 1000,
-        keepalive: 30,
+        connectTimeout: 5000,
+        reconnectPeriod: 2000,
+        keepalive: 60,
     });
 
-    const topic = `locuschat/v1/zones/${state.currentZone.id}`;
+    const topic = `locuschat/v2/zones/${state.currentZone.id}`;
 
     client.on('connect', () => {
       client.subscribe(topic);
       setConnectionStatus('connected');
     });
 
-    client.on('reconnect', () => {
-      setConnectionStatus('reconnecting');
-    });
-
-    client.on('offline', () => {
-      setConnectionStatus('offline');
-    });
+    client.on('reconnect', () => setConnectionStatus('reconnecting'));
+    client.on('offline', () => setConnectionStatus('offline'));
 
     client.on('message', (t, payload) => {
       if (t === topic) {
@@ -164,23 +140,17 @@ const App: React.FC = () => {
               typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() }
             }));
           } else {
-            const msg = data.type === 'message' ? data.payload : data;
+            const msg = data.payload;
             setState(prev => {
               if (prev.messages.some(m => m.id === msg.id)) return prev;
-              if (msg.sender !== prev.currentUser?.username) {
-                soundService.playReceive();
-              }
+              if (msg.sender !== prev.currentUser?.username) soundService.playReceive();
               const newTyping = { ...prev.typingUsers };
               delete newTyping[msg.sender];
-              return {
-                ...prev,
-                messages: [...prev.messages, msg],
-                typingUsers: newTyping
-              };
+              return { ...prev, messages: [...prev.messages, msg], typingUsers: newTyping };
             });
           }
         } catch (e) {
-          console.error("Failed to parse incoming payload", e);
+          console.error("MQTT Payload error", e);
         }
       }
     });
@@ -209,11 +179,11 @@ const App: React.FC = () => {
           };
           const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, zoneToUse.center.lat, zoneToUse.center.lng);
           if (dist > RADIUS_KM) {
-            alert(`You are too far from this zone (${dist.toFixed(2)}km).`);
+            alert(`Too far (${dist.toFixed(1)}km). Radius is ${RADIUS_KM}km.`);
             return;
           }
         } catch (e) {
-          console.error("Invalid invite link");
+          console.error("Invalid link");
           return;
         }
       } else {
@@ -237,9 +207,10 @@ const App: React.FC = () => {
         messages: [{
           id: 'sys-' + now,
           sender: 'System',
-          text: `SECURE TUNNEL ESTABLISHED. WELCOME TO ${zoneToUse.id.toUpperCase()}.`,
+          text: `TUNNEL ESTABLISHED (${RADIUS_KM}KM RADIUS).`,
           timestamp: now,
-          isSystem: true
+          isSystem: true,
+          type: 'text'
         }],
         timeLeft: zoneToUse.expiresAt - now,
         isInRange: true,
@@ -248,7 +219,7 @@ const App: React.FC = () => {
       }));
       window.history.replaceState({}, '', window.location.pathname);
     } catch (err) {
-      alert("Please allow location access to join Locus Chat.");
+      alert("Location required for Locus Chat.");
     }
   };
 
@@ -262,22 +233,24 @@ const App: React.FC = () => {
     warningShownRef.current = false;
   };
 
-  const sendMessage = (text: string) => {
+  const sendMessage = (text: string, type: MediaType = 'text', mediaData?: string) => {
     if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
     const msg: Message = {
       id: Math.random().toString(36).substr(2, 9),
       sender: state.currentUser.username,
       text,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      type,
+      mediaData
     };
-    const topic = `locuschat/v1/zones/${state.currentZone.id}`;
+    const topic = `locuschat/v2/zones/${state.currentZone.id}`;
     mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }));
     soundService.playSend();
   };
 
   const broadcastTyping = () => {
     if (!state.currentUser || !state.currentZone || !mqttClientRef.current || typingTimeoutRef.current) return;
-    const topic = `locuschat/v1/zones/${state.currentZone.id}`;
+    const topic = `locuschat/v2/zones/${state.currentZone.id}`;
     mqttClientRef.current.publish(topic, JSON.stringify({ type: 'typing', sender: state.currentUser.username, timestamp: Date.now() }));
     typingTimeoutRef.current = setTimeout(() => { typingTimeoutRef.current = null; }, 2000);
   };
@@ -293,13 +266,7 @@ const App: React.FC = () => {
       />
       
       <main className="flex-1 relative overflow-hidden flex flex-col min-h-0 bg-[#0a0a0a]">
-        {showExpiryWarning && (
-          <ExpiryWarning 
-            onDismiss={() => setShowExpiryWarning(false)} 
-            onRestart={handleExit}
-          />
-        )}
-
+        {showExpiryWarning && <ExpiryWarning onDismiss={() => setShowExpiryWarning(false)} onRestart={handleExit} />}
         {!state.currentZone ? (
           <JoinScreen onJoin={handleJoin} invitedZone={invitedZone} />
         ) : (
@@ -321,10 +288,8 @@ const App: React.FC = () => {
             </svg>
           </div>
           <h2 className="text-3xl font-bold mb-4">Signal Lost</h2>
-          <p className="text-gray-400 mb-8 leading-relaxed max-w-xs">You have moved beyond the 2km secure radius. This session has been wiped.</p>
-          <button onClick={handleExit} className="w-full max-w-[240px] px-8 py-4 bg-white text-black font-black rounded-full hover:bg-gray-200 transition active:scale-95 uppercase tracking-widest text-xs">
-            Purge Session
-          </button>
+          <p className="text-gray-400 mb-8 leading-relaxed max-w-xs">Radius breached ({state.distance?.toFixed(1)}km). Secure session purged.</p>
+          <button onClick={handleExit} className="w-full max-w-[240px] px-8 py-4 bg-white text-black font-black rounded-full active:scale-95 uppercase tracking-widest text-xs">Purge Now</button>
         </div>
       )}
     </div>
