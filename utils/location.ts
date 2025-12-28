@@ -14,6 +14,13 @@ export const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2
   return R * c;
 };
 
+export const getDistanceLabel = (km: number): string => {
+  if (km < 0.5) return "VERY NEAR";
+  if (km < 2.0) return "NEAR";
+  if (km < 5.0) return "MODERATE DISTANCE";
+  return "DISTANT";
+};
+
 export const getCurrentPosition = (): Promise<GeolocationPosition> => {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {

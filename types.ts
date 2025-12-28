@@ -21,7 +21,8 @@ export interface Zone {
   id: string;
   name: string;
   type: RoomType;
-  passwordHash?: string; // For verification before joining
+  hostId: string; // Fingerprint of the creator
+  passwordHash?: string;
   center: {
     lat: number;
     lng: number;
@@ -34,10 +35,12 @@ export interface Zone {
 export interface AppState {
   currentZone: Zone | null;
   currentUser: User | null;
+  isHost: boolean;
   messages: Message[];
   isInRange: boolean;
   distance: number | null;
   timeLeft: number;
   typingUsers: Record<string, number>;
   availableRooms: Zone[];
+  userFingerprint: string; // Random ID generated per browser session
 }

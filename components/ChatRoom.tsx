@@ -11,9 +11,10 @@ interface ChatRoomProps {
   typingUsers: Record<string, number>;
   onSendMessage: (text: string, type: MediaType, mediaData?: string) => Promise<void>;
   onTyping: () => void;
+  onRead: () => void;
 }
 
-const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers, onSendMessage, onTyping }) => {
+const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers, onSendMessage, onTyping, onRead }) => {
   const [input, setInput] = useState('');
   const [isModerating, setIsModerating] = useState(false);
   const [recordingMode, setRecordingMode] = useState<'none' | 'audio' | 'video'>('none');
@@ -23,6 +24,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [fullScreenMedia, setFullScreenMedia] = useState<string | null>(null);
   const [showCameraSelector, setShowCameraSelector] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showNewMessageBadge, setShowNewMessageBadge] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -37,18 +40,38 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
   const activeTypingList = Object.keys(typingUsers).filter(u => u !== currentUser?.username);
 
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    const atBottom = scrollHeight - scrollTop - clientHeight < 100;
+    setIsAtBottom(atBottom);
+    if (atBottom) {
+      setShowNewMessageBadge(false);
+      onRead();
+    }
+  };
+
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({
         top: scrollRef.current.scrollHeight,
         behavior
       });
+      setShowNewMessageBadge(false);
+      onRead();
     }
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, activeTypingList.length]);
+    if (isAtBottom) {
+      scrollToBottom('smooth');
+    } else if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.sender !== currentUser?.username && !lastMsg.isSystem) {
+        setShowNewMessageBadge(true);
+      }
+    }
+  }, [messages]);
 
   useEffect(() => {
     if (recordingMode === 'video' && videoPreviewRef.current && streamRef.current) {
@@ -176,8 +199,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
   const toggleCamera = async () => {
     setProcessingStatus("RESETTING SENSORS...");
-    
-    // Immediate teardown
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
@@ -188,7 +209,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
     const newFacing = facingMode === 'user' ? 'environment' : 'user';
 
-    // Wait for the browser to release the hardware
     setTimeout(async () => {
       setFacingMode(newFacing);
       try {
@@ -330,6 +350,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     <div className="flex flex-col h-full bg-[#0a0a0a] overflow-hidden relative">
       <div 
         ref={scrollRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-y-auto px-4 py-4 sm:px-8 space-y-6 no-scrollbar"
       >
         {messages.map((msg, idx) => {
@@ -409,6 +430,18 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           </div>
         )}
       </div>
+
+      {/* New Message Badge */}
+      {showNewMessageBadge && (
+        <button 
+          onClick={() => scrollToBottom('smooth')}
+          className="absolute bottom-32 left-1/2 -translate-x-1/2 z-[80] glass border border-white/10 px-6 py-3 rounded-full flex items-center gap-3 animate-in slide-in-from-bottom duration-300 shadow-2xl"
+        >
+          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+          <span className="text-[10px] font-black uppercase tracking-widest text-white">New Transmission</span>
+          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 14l-7 7-7-7" /></svg>
+        </button>
+      )}
 
       {/* Camera Selection Overlay */}
       {showCameraSelector && (

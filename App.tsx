@@ -5,10 +5,7 @@ import { AppState, Zone, User, Message, MediaType, RoomType } from './types';
 import { 
   RADIUS_KM, 
   SESSION_DURATION_MS, 
-  ADJECTIVES, 
-  NOUNS, 
   COLORS, 
-  LOCATION_CHECK_INTERVAL_MS,
   DISCOVERY_TOPIC,
   DISCOVERY_PULSE_INTERVAL_MS
 } from './constants';
@@ -17,60 +14,108 @@ import { soundService } from './services/soundService';
 import JoinScreen from './components/JoinScreen';
 import ChatRoom from './components/ChatRoom';
 import Header from './components/Header';
-import ExpiryWarning from './components/ExpiryWarning';
+
+const FINGERPRINT = Math.random().toString(36).substr(2, 12);
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
     currentZone: null,
     currentUser: null,
+    isHost: false,
     messages: [],
     isInRange: true,
     distance: null,
     timeLeft: SESSION_DURATION_MS,
     typingUsers: {},
     availableRooms: [],
+    userFingerprint: FINGERPRINT,
   });
 
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
-  const [showExpiryWarning, setShowExpiryWarning] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [roomPassword, setRoomPassword] = useState<string>('');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [pendingZoneId, setPendingZoneId] = useState<string | null>(null);
   
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
   const typingTimeoutRef = useRef<any>(null);
   const appRef = useRef<HTMLDivElement>(null);
-  const warningShownRef = useRef(false);
 
-  // Discovery Management
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  // Main Connection for Discovery and Chat
+  // Handle URL Deep Links
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const zId = params.get('zoneId');
+    if (zId) {
+      setPendingZoneId(zId);
+    }
+  }, []);
+
+  // Session timer logic - Ensuring time remains accurate
+  useEffect(() => {
+    if (!state.currentZone) return;
+
+    const interval = setInterval(() => {
+      setState(prev => {
+        if (!prev.currentZone) return prev;
+        const remaining = prev.currentZone.expiresAt - Date.now();
+        if (remaining <= 0) {
+          clearInterval(interval);
+          alert("Session expired. This zone has been decommissioned.");
+          // Trigger exit next tick to avoid state conflicts
+          setTimeout(handleExit, 0);
+          return { ...prev, timeLeft: 0 };
+        }
+        return { ...prev, timeLeft: remaining };
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [state.currentZone?.id]);
+
+  // Main Discovery & Room Connection
   useEffect(() => {
     const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
-      clientId: 'locus_' + Math.random().toString(16).substr(2, 8),
+      clientId: 'locus_' + FINGERPRINT,
       clean: true,
-      connectTimeout: 5000,
+      connectTimeout: 30000, 
       reconnectPeriod: 2000,
+      keepalive: 60,
     });
 
     client.on('connect', () => {
       setConnectionStatus('connected');
       client.subscribe(DISCOVERY_TOPIC);
-      if (state.currentZone) {
-        client.subscribe(`locuschat/v2/rooms/${state.currentZone.id}`);
+      if (stateRef.current.currentZone) {
+        const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
+        client.subscribe(roomTopic);
+        client.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
       }
     });
 
-    client.on('message', async (topic, payload) => {
-      const data = JSON.parse(payload.toString());
+    client.on('reconnect', () => setConnectionStatus('reconnecting'));
+    client.on('offline', () => setConnectionStatus('offline'));
+    client.on('error', (err: any) => {
+      console.error("MQTT Error:", err.message);
+      if (err.message && err.message.includes('connack timeout')) {
+        setConnectionStatus('reconnecting');
+      }
+    });
 
-      if (topic === DISCOVERY_TOPIC) {
-        handleDiscoveryPulse(data);
-      } else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) {
-        handleIncomingMessage(data);
+    client.on('message', (topic, payload) => {
+      try {
+        const data = JSON.parse(payload.toString());
+        if (topic === DISCOVERY_TOPIC) {
+          handleDiscoveryPulse(data);
+        } else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) {
+          handleRoomEvent(data);
+        }
+      } catch (e) {
+        console.error("Payload parsing error", e);
       }
     });
 
@@ -82,41 +127,60 @@ const App: React.FC = () => {
     try {
       const pos = await getCurrentPosition();
       const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, room.center.lat, room.center.lng);
-      
       if (dist <= RADIUS_KM && room.expiresAt > Date.now()) {
         setState(prev => {
           const others = prev.availableRooms.filter(r => r.id !== room.id);
-          return { ...prev, availableRooms: [...others, { ...room, userCount: room.userCount || 1 }] };
+          return { ...prev, availableRooms: [...others, room] };
         });
       }
-    } catch (e) { /* Location denied - silent */ }
+    } catch (e) {}
   };
 
-  const handleIncomingMessage = (data: any) => {
-    if (data.type === 'typing') {
-      if (data.sender === stateRef.current.currentUser?.username) return;
-      setState(prev => ({
-        ...prev,
-        typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() }
-      }));
-    } else {
-      const msg = data.payload;
-      setState(prev => {
-        if (prev.messages.some(m => m.id === msg.id)) return prev;
-        if (msg.sender !== prev.currentUser?.username) soundService.playReceive();
-        const newTyping = { ...prev.typingUsers };
-        delete newTyping[msg.sender];
-        return { ...prev, messages: [...prev.messages, msg], typingUsers: newTyping };
-      });
+  const handleRoomEvent = (data: any) => {
+    const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone?.id}`;
+    
+    switch (data.type) {
+      case 'message':
+        const msg = data.payload;
+        setState(prev => {
+          if (prev.messages.some(m => m.id === msg.id)) return prev;
+          if (msg.sender !== prev.currentUser?.username) {
+            soundService.playReceive();
+            setUnreadCount(c => c + 1);
+          }
+          return { ...prev, messages: [...prev.messages, msg] };
+        });
+        break;
+      case 'typing':
+        if (data.sender === stateRef.current.currentUser?.username) return;
+        setState(prev => ({ ...prev, typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } }));
+        break;
+      case 'history_req':
+        if (stateRef.current.messages.length > 0) {
+          mqttClientRef.current.publish(roomTopic, JSON.stringify({ 
+            type: 'history_res', 
+            target: data.sender,
+            payload: stateRef.current.messages 
+          }));
+        }
+        break;
+      case 'history_res':
+        if (data.target === FINGERPRINT) {
+          setState(prev => ({ ...prev, messages: data.payload }));
+        }
+        break;
+      case 'room_delete':
+        alert("This Zone has been decommissioned.");
+        handleExit();
+        break;
     }
   };
 
-  // Heartbeat to keep room in discovery feed
+  // Discovery pulse logic
   useEffect(() => {
     if (!state.currentZone || !mqttClientRef.current) return;
     const pulse = setInterval(() => {
-      const pulseData = { ...state.currentZone, userCount: Object.keys(state.typingUsers).length + 1 };
-      mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(pulseData));
+      mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(state.currentZone));
     }, DISCOVERY_PULSE_INTERVAL_MS);
     return () => clearInterval(pulse);
   }, [state.currentZone]);
@@ -124,45 +188,43 @@ const App: React.FC = () => {
   const hashPassword = async (pwd: string) => {
     const msgUint8 = new TextEncoder().encode(pwd + "locus-salt");
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
-  const createRoom = async (name: string, type: RoomType, password?: string) => {
+  const createRoom = async (name: string, type: RoomType, username: string, password?: string) => {
     const pos = await getCurrentPosition();
     const now = Date.now();
     const id = Math.random().toString(36).substr(2, 9);
-    
+    const pwdHash = (type === 'private' && password) ? await hashPassword(password) : undefined;
+
     const zone: Zone = {
       id,
       name: name.toUpperCase(),
       type,
+      hostId: FINGERPRINT,
       center: { lat: pos.coords.latitude, lng: pos.coords.longitude },
       createdAt: now,
       expiresAt: now + SESSION_DURATION_MS,
       userCount: 1,
-      passwordHash: type === 'private' && password ? await hashPassword(password) : undefined
+      passwordHash: pwdHash
     };
 
-    if (type === 'private') setRoomPassword(password || '');
-    joinZone(zone, true);
+    if (password) setRoomPassword(password);
+    enterZone(zone, username, true);
   };
 
-  const joinRoom = async (zone: Zone, password?: string) => {
+  const joinRoom = async (zone: Zone, username: string, password?: string) => {
     if (zone.type === 'private' && zone.passwordHash) {
       const inputHash = await hashPassword(password || '');
-      if (inputHash !== zone.passwordHash) {
-        alert("Invalid Access Key.");
-        return;
-      }
+      if (inputHash !== zone.passwordHash) return alert("Access Denied.");
       setRoomPassword(password || '');
     }
-    joinZone(zone, false);
+    enterZone(zone, username, zone.hostId === FINGERPRINT);
   };
 
-  const joinZone = (zone: Zone, isHost: boolean) => {
+  const enterZone = (zone: Zone, username: string, isHost: boolean) => {
     const newUser: User = {
-      username: `${ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]} ${NOUNS[Math.floor(Math.random() * NOUNS.length)]}`.toUpperCase(),
+      username: username.toUpperCase(),
       color: COLORS[Math.floor(Math.random() * COLORS.length)]
     };
 
@@ -170,32 +232,61 @@ const App: React.FC = () => {
       ...prev,
       currentZone: zone,
       currentUser: newUser,
-      messages: [{
-        id: 'sys-' + Date.now(),
-        sender: 'System',
-        text: `${zone.name} ESTABLISHED. TTL: 120M.`,
-        timestamp: Date.now(),
-        isSystem: true,
-        type: 'text'
-      }],
+      isHost,
+      messages: [],
       timeLeft: zone.expiresAt - Date.now(),
     }));
+    setUnreadCount(0);
+    setPendingZoneId(null);
   };
 
   const handleExit = () => {
     setState(prev => ({
       ...prev,
-      currentZone: null, currentUser: null, messages: [],
+      currentZone: null, currentUser: null, messages: [], isHost: false,
       timeLeft: SESSION_DURATION_MS, typingUsers: {},
     }));
-    setShowExitConfirm(false);
     setRoomPassword('');
+    setUnreadCount(0);
+    setShowExitConfirm(false);
+    // Remove query params on exit
+    const url = new URL(window.location.href);
+    url.searchParams.delete('zoneId');
+    window.history.replaceState({}, '', url.toString());
+  };
+
+  const handleShare = async () => {
+    if (state.currentZone) {
+      const shareUrl = `${window.location.origin}${window.location.pathname}?zoneId=${state.currentZone.id}`;
+      const text = `Join my ephemeral zone "${state.currentZone.name}" on Locus Chat!`;
+      
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: 'Locus Chat Invitation',
+            text: text,
+            url: shareUrl,
+          });
+        } catch (err: any) {
+          // Gracefully handle cancellation and other errors
+          if (err.name !== 'AbortError') {
+            console.error('Share failed:', err);
+            // Fallback to clipboard if share fails for non-cancellation reasons
+            navigator.clipboard.writeText(shareUrl);
+            alert("Share failed. Zone link copied to clipboard instead.");
+          }
+        }
+      } else {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          alert("Zone invite link copied to clipboard.");
+        });
+      }
+    }
   };
 
   const sendMessage = async (text: string, type: MediaType = 'text', mediaData?: string): Promise<void> => {
     return new Promise((resolve, reject) => {
       if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return reject();
-      
       const msg: Message = {
         id: Math.random().toString(36).substr(2, 9),
         sender: state.currentUser.username,
@@ -204,14 +295,10 @@ const App: React.FC = () => {
         type,
         mediaData
       };
-
       const topic = `locuschat/v2/rooms/${state.currentZone.id}`;
       mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }), (err: any) => {
         if (err) reject(err);
-        else {
-          soundService.playSend();
-          resolve();
-        }
+        else { soundService.playSend(); resolve(); }
       });
     });
   };
@@ -228,9 +315,12 @@ const App: React.FC = () => {
       <Header 
         zone={state.currentZone} 
         timeLeft={state.timeLeft} 
-        distance={state.distance}
         status={connectionStatus}
+        isHost={state.isHost}
+        password={roomPassword}
+        unreadCount={unreadCount}
         onExitRequest={() => setShowExitConfirm(true)}
+        onShare={handleShare}
       />
       
       <main className="flex-1 relative overflow-hidden flex flex-col bg-[#0a0a0a]">
@@ -238,7 +328,8 @@ const App: React.FC = () => {
           <JoinScreen 
             onJoin={joinRoom} 
             onCreate={createRoom} 
-            rooms={state.availableRooms} 
+            rooms={state.availableRooms}
+            deepLinkedZoneId={pendingZoneId}
           />
         ) : (
           <ChatRoom 
@@ -247,21 +338,19 @@ const App: React.FC = () => {
             typingUsers={state.typingUsers}
             onSendMessage={sendMessage}
             onTyping={broadcastTyping}
+            onRead={() => setUnreadCount(0)}
           />
         )}
       </main>
 
       {showExitConfirm && (
         <div className="absolute inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md p-6 animate-in fade-in duration-300">
-           <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center shadow-2xl">
-              <div className="w-16 h-16 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center mb-6">
-                <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-              </div>
-              <h2 className="text-xl font-bold mb-3 text-white">Sever Session?</h2>
-              <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-[0.2em]">All volatile memory will be purged immediately.</p>
+           <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center">
+              <h2 className="text-xl font-bold mb-3 text-white">Leave Zone?</h2>
+              <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest">Local chat buffer will be cleared.</p>
               <div className="flex flex-col w-full gap-3">
-                <button onClick={handleExit} className="w-full py-4 bg-red-500 text-white font-black rounded-2xl active:scale-95 uppercase tracking-widest text-[10px]">Purge & Exit</button>
-                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white/5 text-gray-400 font-black rounded-2xl hover:bg-white/10 active:scale-95 uppercase tracking-widest text-[10px]">Cancel</button>
+                <button onClick={handleExit} className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px]">Exit Now</button>
+                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px]">Cancel</button>
               </div>
            </div>
         </div>
