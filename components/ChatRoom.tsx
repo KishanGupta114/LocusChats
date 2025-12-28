@@ -21,6 +21,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const [reviewData, setReviewData] = useState<{ type: MediaType; data: string } | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
   const [processingMedia, setProcessingMedia] = useState(false);
+  const [fullScreenMedia, setFullScreenMedia] = useState<string | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -48,7 +49,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     scrollToBottom();
   }, [messages, activeTypingList.length]);
 
-  // Handle Video Preview mounting and stream updates
   useEffect(() => {
     if (recordingMode === 'video' && videoPreviewRef.current && streamRef.current) {
       videoPreviewRef.current.srcObject = streamRef.current;
@@ -72,7 +72,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           } else {
             const base64 = await fileToBase64(file);
             if (!isSafePayloadSize(base64)) {
-              alert("File too large for ephemeral tunnel. Record in-app for better compression.");
+              alert("File too large. Try recording directly in-app for better compression.");
               setProcessingMedia(false);
             } else {
               setReviewData({ type: 'video', data: base64 });
@@ -163,7 +163,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       
       setTimeout(() => drawWaveform(analyser), 100);
     } catch (err) {
-      alert("Microphone required for secure audio notes.");
+      alert("Microphone required for session.");
     }
   };
 
@@ -171,7 +171,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     const isRecording = mediaRecorderRef.current?.state === 'recording';
     const newFacing = facingMode === 'user' ? 'environment' : 'user';
     
-    // 1. Stop everything
     if (isRecording) {
       mediaRecorderRef.current?.stop();
       if (timerRef.current) clearInterval(timerRef.current);
@@ -179,23 +178,17 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     cleanupStream();
     setRecordingMode('none');
 
-    // 2. Wait a tick for hardware to release
     setTimeout(() => {
       setFacingMode(newFacing);
       startVideoRecording(newFacing);
-    }, 100);
+    }, 150);
   };
 
   const startVideoRecording = async (mode = facingMode) => {
     try {
       cleanupStream();
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: mode, 
-          width: { ideal: 480 }, 
-          height: { ideal: 480 }, 
-          frameRate: { ideal: 15 } 
-        }, 
+        video: { facingMode: mode, width: { ideal: 480 }, height: { ideal: 480 }, frameRate: { ideal: 15 } }, 
         audio: true 
       });
       streamRef.current = stream;
@@ -218,7 +211,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         if (isSafePayloadSize(base64)) {
           setReviewData({ type: 'video', data: base64 });
         } else {
-          alert("Recording too large for ephemeral transport. Try a shorter clip.");
+          alert("Recording too large. Try a shorter clip.");
         }
         setProcessingMedia(false);
         cleanupStream();
@@ -276,8 +269,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       setProcessingMedia(true);
       onSendMessage('', reviewData.type, reviewData.data);
       setReviewData(null);
-      setProcessingMedia(false);
-      setTimeout(() => scrollToBottom('smooth'), 100);
+      // Let the processing indicator linger slightly for feedback
+      setTimeout(() => {
+        setProcessingMedia(false);
+        scrollToBottom('smooth');
+      }, 300);
     }
   };
 
@@ -338,16 +334,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   <img 
                     src={msg.mediaData} 
                     alt="Shared" 
-                    className="max-h-[60vh] w-auto object-contain cursor-pointer"
-                    onClick={() => {
-                      const win = window.open();
-                      win?.document.write(`<body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;"><img src="${msg.mediaData}" style="max-width:100%;max-height:100%;"></body>`);
-                    }}
+                    className="max-h-[60vh] w-auto object-contain cursor-pointer active:scale-98 transition-transform"
+                    onClick={() => setFullScreenMedia(msg.mediaData || null)}
                   />
                 )}
                 
                 {msg.type === 'video' && (
-                  <video controls playsInline className="max-h-[60vh] w-full bg-black">
+                  <video controls playsInline style={{ transform: 'none' }} className="max-h-[60vh] w-full bg-black">
                     <source src={msg.mediaData} />
                   </video>
                 )}
@@ -377,6 +370,22 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           </div>
         )}
       </div>
+
+      {/* In-App Image Lightbox */}
+      {fullScreenMedia && (
+        <div className="absolute inset-0 z-[200] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
+           <button 
+             onClick={() => setFullScreenMedia(null)}
+             className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-white/10 text-white rounded-full hover:bg-white/20 transition-all active:scale-90"
+           >
+             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+             </svg>
+           </button>
+           <img src={fullScreenMedia} className="max-w-full max-h-[85vh] object-contain shadow-2xl rounded-sm" alt="Expanded content" />
+           <p className="mt-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 mono">Volatile Buffer View</p>
+        </div>
+      )}
 
       {/* Media Overlay Panel */}
       {(recordingMode !== 'none' || reviewData) && (
@@ -409,7 +418,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                       autoPlay 
                       muted 
                       playsInline 
-                      style={{ transform: 'none' }} // NO MIRRORING
+                      style={{ transform: 'none' }} 
                       className="w-full h-full object-cover" 
                     />
                     <button 
@@ -471,9 +480,9 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex items-center justify-between animate-pulse shadow-lg">
               <div className="flex items-center gap-3">
                 <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">Processing Secure Payload...</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">Encrypting & Sending Payload...</span>
               </div>
-              <span className="text-[10px] font-bold text-blue-500/50 mono">ENCRYPTING</span>
+              <span className="text-[10px] font-bold text-blue-500/50 mono">SECURE</span>
             </div>
           )}
 
@@ -497,7 +506,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   }
                 }}
                 placeholder={isModerating ? "Verifying..." : "Message everyone..."}
-                disabled={isModerating}
+                disabled={isModerating || processingMedia}
                 className="w-full bg-transparent px-5 py-4 focus:outline-none placeholder:text-gray-600 text-[16px] font-medium resize-none leading-relaxed text-white overflow-hidden"
               />
               
@@ -520,9 +529,9 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
                 <button 
                   onClick={handleSubmit}
-                  disabled={!input.trim() || isModerating}
+                  disabled={!input.trim() || isModerating || processingMedia}
                   className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${
-                    input.trim() && !isModerating ? 'bg-white text-black shadow-xl scale-100' : 'bg-white/5 text-gray-700 scale-90 opacity-50'
+                    input.trim() && !isModerating && !processingMedia ? 'bg-white text-black shadow-xl scale-100' : 'bg-white/5 text-gray-700 scale-90 opacity-50'
                   }`}
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 12h14M12 5l7 7-7 7" /></svg>
