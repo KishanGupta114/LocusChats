@@ -24,6 +24,7 @@ const App: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
   const [invitedZone, setInvitedZone] = useState<Zone | null>(null);
   const [showExpiryWarning, setShowExpiryWarning] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
   
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
@@ -230,6 +231,7 @@ const App: React.FC = () => {
       typingUsers: {},
     });
     setShowExpiryWarning(false);
+    setShowExitConfirm(false);
     warningShownRef.current = false;
   };
 
@@ -262,7 +264,7 @@ const App: React.FC = () => {
         timeLeft={state.timeLeft} 
         distance={state.distance}
         status={connectionStatus}
-        onExit={handleExit}
+        onExitRequest={() => setShowExitConfirm(true)}
       />
       
       <main className="flex-1 relative overflow-hidden flex flex-col min-h-0 bg-[#0a0a0a]">
@@ -279,6 +281,25 @@ const App: React.FC = () => {
           />
         )}
       </main>
+
+      {/* Exit Confirmation Dialog */}
+      {showExitConfirm && (
+        <div className="absolute inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md p-6 animate-in fade-in duration-300">
+           <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center">
+              <div className="w-16 h-16 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center mb-6">
+                <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold mb-3 tracking-tight text-white">Sever Session?</h2>
+              <p className="text-gray-400 text-xs leading-relaxed mb-8 mono uppercase tracking-widest">All messages will be purged from volatile memory forever.</p>
+              <div className="flex flex-col w-full gap-3">
+                <button onClick={handleExit} className="w-full py-4 bg-red-500 text-white font-black rounded-2xl active:scale-95 uppercase tracking-widest text-[10px]">Purge & Exit</button>
+                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white/5 text-gray-400 font-black rounded-2xl hover:bg-white/10 active:scale-95 uppercase tracking-widest text-[10px]">Stay Active</button>
+              </div>
+           </div>
+        </div>
+      )}
 
       {!state.isInRange && state.currentZone && (
         <div className="absolute inset-0 bg-black flex flex-col items-center justify-center z-[100] p-8 text-center animate-in fade-in zoom-in duration-300">

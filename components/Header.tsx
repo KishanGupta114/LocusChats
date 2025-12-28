@@ -7,10 +7,10 @@ interface HeaderProps {
   timeLeft: number;
   distance: number | null;
   status: 'connected' | 'reconnecting' | 'offline';
-  onExit: () => void;
+  onExitRequest: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, status, onExit }) => {
+const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, status, onExitRequest }) => {
   const [copied, setCopied] = useState(false);
 
   const formatTime = (ms: number) => {
@@ -80,7 +80,7 @@ const Header: React.FC<HeaderProps> = ({ zone, timeLeft, distance, status, onExi
           </div>
 
           <button 
-            onClick={onExit}
+            onClick={onExitRequest}
             className="p-2 text-gray-500 hover:text-white transition active:scale-90"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
