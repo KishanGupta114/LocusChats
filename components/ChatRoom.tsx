@@ -48,12 +48,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     scrollToBottom();
   }, [messages, activeTypingList.length]);
 
-  // Handle Video Preview mounting and stream updates (including camera switching)
+  // Handle Video Preview mounting and stream updates
   useEffect(() => {
     if (recordingMode === 'video' && videoPreviewRef.current && streamRef.current) {
       videoPreviewRef.current.srcObject = streamRef.current;
     }
-  }, [recordingMode, facingMode, streamRef.current]);
+  }, [recordingMode, streamRef.current]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -72,7 +72,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
           } else {
             const base64 = await fileToBase64(file);
             if (!isSafePayloadSize(base64)) {
-              alert("Video too large (>1MB). Try recording directly in-app for optimized compression.");
+              alert("File too large for ephemeral tunnel. Record in-app for better compression.");
               setProcessingMedia(false);
             } else {
               setReviewData({ type: 'video', data: base64 });
@@ -90,7 +90,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         setProcessingMedia(false);
       }
     } catch (err) {
-      console.error("Media processing failed", err);
+      console.error("Media processing error", err);
       setProcessingMedia(false);
     }
     e.target.value = '';
@@ -163,23 +163,27 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       
       setTimeout(() => drawWaveform(analyser), 100);
     } catch (err) {
-      alert("Microphone required.");
+      alert("Microphone required for secure audio notes.");
     }
   };
 
   const toggleCamera = async () => {
-    if (recordingMode === 'video') {
-      const newFacing = facingMode === 'user' ? 'environment' : 'user';
-      setFacingMode(newFacing);
-      // To switch camera reliably, we must restart the stream capture
-      if (mediaRecorderRef.current?.state === 'recording') {
-        stopRecording();
-      } else {
-        cleanupStream();
-      }
-      // Restart with new facing mode
-      startVideoRecording(newFacing);
+    const isRecording = mediaRecorderRef.current?.state === 'recording';
+    const newFacing = facingMode === 'user' ? 'environment' : 'user';
+    
+    // 1. Stop everything
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      if (timerRef.current) clearInterval(timerRef.current);
     }
+    cleanupStream();
+    setRecordingMode('none');
+
+    // 2. Wait a tick for hardware to release
+    setTimeout(() => {
+      setFacingMode(newFacing);
+      startVideoRecording(newFacing);
+    }, 100);
   };
 
   const startVideoRecording = async (mode = facingMode) => {
@@ -214,7 +218,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         if (isSafePayloadSize(base64)) {
           setReviewData({ type: 'video', data: base64 });
         } else {
-          alert("Recording too large. Try a shorter clip.");
+          alert("Recording too large for ephemeral transport. Try a shorter clip.");
         }
         setProcessingMedia(false);
         cleanupStream();
@@ -269,8 +273,10 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
   const handleSendMedia = () => {
     if (reviewData) {
+      setProcessingMedia(true);
       onSendMessage('', reviewData.type, reviewData.data);
       setReviewData(null);
+      setProcessingMedia(false);
       setTimeout(() => scrollToBottom('smooth'), 100);
     }
   };
@@ -326,7 +332,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-2xl transition-all ${
                 isMe ? 'bubble-me rounded-tr-none' : 'bubble-them text-gray-200 rounded-tl-none'
               }`}>
-                {msg.type === 'text' && <div className="px-4 py-3 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{msg.text}</div>}
+                {msg.type === 'text' && <div className="px-4 py-3 text-[15px] font-medium leading-relaxed break-words whitespace-pre-wrap">{msg.text}</div>}
                 
                 {msg.type === 'image' && (
                   <img 
@@ -398,7 +404,14 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               <div className="aspect-video w-full rounded-2xl bg-black border border-white/5 overflow-hidden flex items-center justify-center relative">
                 {recordingMode === 'video' && (
                   <>
-                    <video ref={videoPreviewRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                    <video 
+                      ref={videoPreviewRef} 
+                      autoPlay 
+                      muted 
+                      playsInline 
+                      style={{ transform: 'none' }} // NO MIRRORING
+                      className="w-full h-full object-cover" 
+                    />
                     <button 
                       onClick={toggleCamera}
                       className="absolute bottom-4 right-4 p-3 bg-black/60 text-white rounded-full backdrop-blur-xl border border-white/10 hover:bg-black/80 transition-all active:scale-90 shadow-2xl"
@@ -417,7 +430,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   <img src={reviewData.data} className="w-full h-full object-contain" />
                 )}
                 {reviewData?.type === 'video' && (
-                  <video src={reviewData.data} autoPlay loop muted playsInline className="w-full h-full object-cover" />
+                  <video src={reviewData.data} autoPlay loop muted playsInline style={{ transform: 'none' }} className="w-full h-full object-cover" />
                 )}
                 {reviewData?.type === 'audio' && (
                   <div className="text-red-500 animate-pulse">
@@ -429,8 +442,14 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
               <div className="flex gap-3">
                 {reviewData ? (
                   <>
-                    <button onClick={handleSendMedia} className="flex-1 py-4 bg-white text-black font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-gray-200 transition-all active:scale-95 shadow-xl">Send To Zone</button>
-                    <button onClick={() => setReviewData(null)} className="px-6 py-4 bg-white/5 text-gray-400 font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-white/10 transition-all">Discard</button>
+                    <button 
+                      onClick={handleSendMedia} 
+                      disabled={processingMedia}
+                      className="flex-1 py-4 bg-white text-black font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-gray-200 transition-all active:scale-95 shadow-xl disabled:opacity-50"
+                    >
+                      {processingMedia ? 'SENDING...' : 'Send To Zone'}
+                    </button>
+                    <button onClick={() => setReviewData(null)} disabled={processingMedia} className="px-6 py-4 bg-white/5 text-gray-400 font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-white/10 transition-all disabled:opacity-50">Discard</button>
                   </>
                 ) : (
                   <>
@@ -449,14 +468,17 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         <div className="max-w-4xl mx-auto flex flex-col gap-3">
           
           {processingMedia && (
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-3 flex items-center justify-between animate-pulse">
-              <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">Processing Secure Payload...</span>
-              <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex items-center justify-between animate-pulse shadow-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">Processing Secure Payload...</span>
+              </div>
+              <span className="text-[10px] font-bold text-blue-500/50 mono">ENCRYPTING</span>
             </div>
           )}
 
           {recordingMode === 'none' && !reviewData && !processingMedia && (
-            <div className="relative bg-[#111] border border-white/5 rounded-[2.5rem] flex flex-col overflow-hidden focus-within:border-white/20 transition-all p-2">
+            <div className="relative bg-[#111] border border-white/5 rounded-[2.5rem] flex flex-col overflow-hidden focus-within:border-white/20 transition-all p-2 shadow-2xl">
               <textarea 
                 ref={textAreaRef}
                 rows={1}
@@ -476,7 +498,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                 }}
                 placeholder={isModerating ? "Verifying..." : "Message everyone..."}
                 disabled={isModerating}
-                className="w-full bg-transparent px-5 py-4 focus:outline-none placeholder:text-gray-600 text-[16px] resize-none leading-relaxed text-white overflow-hidden"
+                className="w-full bg-transparent px-5 py-4 focus:outline-none placeholder:text-gray-600 text-[16px] font-medium resize-none leading-relaxed text-white overflow-hidden"
               />
               
               <div className="flex items-center justify-between px-3 pb-2 pt-1">
