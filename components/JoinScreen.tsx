@@ -122,7 +122,7 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
                         )}
                       </div>
                       <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">
-                        {getDistanceLabel(dist)}
+                        {getDistanceLabel(dist)} • {room.userCount || 1} {room.userCount === 1 ? 'MEMBER' : 'MEMBERS'}
                       </span>
                     </div>
                     <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest mono">

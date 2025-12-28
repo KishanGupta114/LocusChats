@@ -41,7 +41,9 @@ const Header: React.FC<HeaderProps> = ({ zone, timeLeft, status, isHost, passwor
         </div>
         <div className="flex flex-col -gap-1">
           <h1 className="font-black tracking-tighter text-sm uppercase">Locus Chat</h1>
-          <span className="text-[7px] mono text-gray-500 uppercase tracking-widest">Radius: 10km • TTL: 2H</span>
+          <span className="text-[7px] mono text-gray-500 uppercase tracking-widest">
+            {zone ? `${zone.userCount || 1} IN ZONE • ` : ''}10KM • 2H
+          </span>
         </div>
       </div>
 

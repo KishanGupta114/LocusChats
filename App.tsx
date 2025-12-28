@@ -17,6 +17,7 @@ import Header from './components/Header';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
 const TYPING_EXPIRY_MS = 4000;
+const PRESENCE_INTERVAL_MS = 15000;
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
@@ -37,6 +38,7 @@ const App: React.FC = () => {
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [unreadCount, setUnreadCount] = useState(0);
   const [pendingZoneId, setPendingZoneId] = useState<string | null>(null);
+  const [activeMembers, setActiveMembers] = useState<Set<string>>(new Set());
   
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
@@ -116,6 +118,8 @@ const App: React.FC = () => {
         const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
         client.subscribe(roomTopic);
         client.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
+        // Broadcast presence on connect
+        client.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
       }
     });
 
@@ -167,7 +171,6 @@ const App: React.FC = () => {
         setState(prev => {
           if (prev.messages.some(m => m.id === msg.id)) return prev;
           
-          // Clear typing status immediately when a message is received
           const newTyping = { ...prev.typingUsers };
           delete newTyping[msg.sender];
 
@@ -188,6 +191,29 @@ const App: React.FC = () => {
           ...prev, 
           typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } 
         }));
+        break;
+      case 'presence':
+        // Host tracks unique active members to update count in discovery pulse
+        if (stateRef.current.isHost) {
+          setActiveMembers(prev => {
+            const next = new Set(prev);
+            next.add(data.sender);
+            return next;
+          });
+        }
+        // Update local UI userCount if pulsed by host or via this presence
+        setState(prev => {
+          if (prev.currentZone) {
+            // This is a simplified member count based on local history of presence
+            // In a real app we'd use a more sophisticated consensus
+            const newCount = stateRef.current.isHost ? activeMembers.size : (prev.currentZone.userCount || 1);
+            return {
+              ...prev,
+              currentZone: { ...prev.currentZone, userCount: Math.max(newCount, prev.currentZone.userCount) }
+            };
+          }
+          return prev;
+        });
         break;
       case 'history_req':
         if (stateRef.current.messages.length > 0) {
@@ -214,9 +240,28 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!state.currentZone || !mqttClientRef.current) return;
     const pulse = setInterval(() => {
-      mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(state.currentZone));
+      const zoneToPulse = { 
+        ...state.currentZone, 
+        userCount: state.isHost ? Math.max(1, activeMembers.size) : state.currentZone.userCount 
+      };
+      mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(zoneToPulse));
+      
+      // If host, clear member list occasionally to prune ghosts
+      if (state.isHost) {
+        setActiveMembers(new Set([FINGERPRINT]));
+      }
     }, DISCOVERY_PULSE_INTERVAL_MS);
     return () => clearInterval(pulse);
+  }, [state.currentZone, state.isHost, activeMembers]);
+
+  // Presence heartbeat logic
+  useEffect(() => {
+    if (!state.currentZone || !mqttClientRef.current) return;
+    const hb = setInterval(() => {
+      const roomTopic = `locuschat/v2/rooms/${state.currentZone?.id}`;
+      mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
+    }, PRESENCE_INTERVAL_MS);
+    return () => clearInterval(hb);
   }, [state.currentZone]);
 
   const hashPassword = async (pwd: string) => {
@@ -244,6 +289,7 @@ const App: React.FC = () => {
     };
 
     if (password) setRoomPassword(password);
+    setActiveMembers(new Set([FINGERPRINT]));
     enterZone(zone, username, true);
   };
 
@@ -272,6 +318,12 @@ const App: React.FC = () => {
     }));
     setUnreadCount(0);
     setPendingZoneId(null);
+
+    // Immediate presence broadcast
+    if (mqttClientRef.current) {
+       const roomTopic = `locuschat/v2/rooms/${zone.id}`;
+       mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
+    }
   };
 
   const handleExit = () => {
@@ -282,6 +334,7 @@ const App: React.FC = () => {
     }));
     setRoomPassword('');
     setUnreadCount(0);
+    setActiveMembers(new Set());
     setShowExitConfirm(false);
     const url = new URL(window.location.href);
     url.searchParams.delete('zoneId');
