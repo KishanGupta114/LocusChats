@@ -235,19 +235,30 @@ const App: React.FC = () => {
     warningShownRef.current = false;
   };
 
-  const sendMessage = (text: string, type: MediaType = 'text', mediaData?: string) => {
-    if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
-    const msg: Message = {
-      id: Math.random().toString(36).substr(2, 9),
-      sender: state.currentUser.username,
-      text,
-      timestamp: Date.now(),
-      type,
-      mediaData
-    };
-    const topic = `locuschat/v2/zones/${state.currentZone.id}`;
-    mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }));
-    soundService.playSend();
+  const sendMessage = async (text: string, type: MediaType = 'text', mediaData?: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!state.currentUser || !state.currentZone || !mqttClientRef.current) {
+        return reject(new Error("No active session"));
+      }
+      const msg: Message = {
+        id: Math.random().toString(36).substr(2, 9),
+        sender: state.currentUser.username,
+        text,
+        timestamp: Date.now(),
+        type,
+        mediaData
+      };
+      const topic = `locuschat/v2/zones/${state.currentZone.id}`;
+      mqttClientRef.current.publish(topic, JSON.stringify({ type: 'message', payload: msg }), (err: any) => {
+        if (err) {
+          console.error("Publish failed", err);
+          reject(err);
+        } else {
+          soundService.playSend();
+          resolve();
+        }
+      });
+    });
   };
 
   const broadcastTyping = () => {

@@ -9,7 +9,7 @@ interface ChatRoomProps {
   messages: Message[];
   currentUser: User | null;
   typingUsers: Record<string, number>;
-  onSendMessage: (text: string, type: MediaType, mediaData?: string) => void;
+  onSendMessage: (text: string, type: MediaType, mediaData?: string) => Promise<void>;
   onTyping: () => void;
 }
 
@@ -174,31 +174,31 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   };
 
   const toggleCamera = async () => {
-    const isRecording = mediaRecorderRef.current?.state === 'recording';
-    const newFacing = facingMode === 'user' ? 'environment' : 'user';
+    setProcessingStatus("RESETTING SENSORS...");
     
-    // UI feedback for transition
-    setProcessingStatus("SWITCHING SENSORS...");
-    
-    if (isRecording) {
-      mediaRecorderRef.current?.stop();
-      if (timerRef.current) clearInterval(timerRef.current);
+    // Immediate teardown
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
     }
-    
+    mediaRecorderRef.current = null;
+    if (timerRef.current) clearInterval(timerRef.current);
     cleanupStream();
     setRecordingMode('none');
 
-    // Small delay to ensure hardware is released
+    const newFacing = facingMode === 'user' ? 'environment' : 'user';
+
+    // Wait for the browser to release the hardware
     setTimeout(async () => {
       setFacingMode(newFacing);
       try {
         await startVideoRecording(newFacing);
         setProcessingStatus(null);
       } catch (e) {
+        console.error("Re-init camera failed", e);
         setProcessingStatus(null);
-        alert("Camera sensor failed to initialize.");
+        alert("Could not switch camera. Device sensor is busy.");
       }
-    }, 300);
+    }, 400);
   };
 
   const startVideoRecording = async (mode = facingMode) => {
@@ -227,13 +227,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
       recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
       recorder.onstop = async () => {
-        setProcessingStatus("PROCESSING VIDEO...");
+        setProcessingStatus("ENCRYPTING VIDEO...");
         const videoBlob = new Blob(audioChunksRef.current, { type: 'video/webm' });
         const base64 = await fileToBase64(videoBlob);
         if (isSafePayloadSize(base64)) {
           setReviewData({ type: 'video', data: base64 });
         } else {
-          alert("Recording too large for tunnel. Try a shorter clip.");
+          alert("Recording too large for ephemeral transport. Shorter clip recommended.");
         }
         setProcessingStatus(null);
         cleanupStream();
@@ -253,7 +253,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         });
       }, 1000);
     } catch (err) {
-      throw err; // Caught by toggleCamera or direct call
+      throw err;
     }
   };
 
@@ -286,18 +286,16 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
   };
 
-  const handleSendMedia = () => {
+  const handleSendMedia = async () => {
     if (reviewData) {
-      setProcessingStatus("SENDING TO ZONE...");
+      setProcessingStatus("TRANSMITTING TO RADIUS...");
       try {
-        onSendMessage('', reviewData.type, reviewData.data);
+        await onSendMessage('', reviewData.type, reviewData.data);
         setReviewData(null);
-        setTimeout(() => {
-          setProcessingStatus(null);
-          scrollToBottom('smooth');
-        }, 500);
+        setProcessingStatus(null);
+        setTimeout(() => scrollToBottom('smooth'), 100);
       } catch (e) {
-        alert("Transport error. The tunnel might be unstable.");
+        alert("Failed to send media. The secure tunnel might be unstable.");
         setProcessingStatus(null);
       }
     }
@@ -312,10 +310,14 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
     setIsModerating(false);
 
     if (check.safe) {
-      onSendMessage(text, 'text');
-      setInput('');
-      if (textAreaRef.current) textAreaRef.current.style.height = 'auto';
-      setTimeout(() => scrollToBottom('smooth'), 50);
+      try {
+        await onSendMessage(text, 'text');
+        setInput('');
+        if (textAreaRef.current) textAreaRef.current.style.height = 'auto';
+        setTimeout(() => scrollToBottom('smooth'), 50);
+      } catch (e) {
+        alert("Could not send message. Check connectivity.");
+      }
     } else {
       alert(`Blocked: ${check.reason || 'Safety violation'}`);
     }
@@ -359,16 +361,24 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                 {msg.type === 'image' && (
                   <img 
                     src={msg.mediaData} 
-                    alt="Shared" 
+                    alt="Shared content" 
                     className="max-h-[60vh] w-auto object-contain cursor-pointer active:scale-98 transition-transform"
                     onClick={() => setFullScreenMedia(msg.mediaData || null)}
                   />
                 )}
                 
                 {msg.type === 'video' && (
-                  <video controls playsInline style={{ transform: 'none' }} className="max-h-[60vh] w-full bg-black">
-                    <source src={msg.mediaData} />
-                  </video>
+                  <div className="relative group">
+                    <video 
+                      controls 
+                      playsInline 
+                      style={{ transform: 'none' }} 
+                      className="max-h-[60vh] w-full bg-black"
+                      onError={() => alert("Secure playback failed. Media may have expired from RAM.")}
+                    >
+                      <source src={msg.mediaData} />
+                    </video>
+                  </div>
                 )}
                 
                 {msg.type === 'audio' && (
@@ -408,8 +418,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
              </svg>
            </button>
-           <img src={fullScreenMedia} className="max-w-full max-h-[85vh] object-contain shadow-2xl rounded-sm" alt="Expanded content" />
-           <p className="mt-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 mono">Volatile Buffer View</p>
+           <img src={fullScreenMedia} className="max-w-full max-h-[85vh] object-contain shadow-2xl rounded-sm" alt="Expanded view" />
+           <p className="mt-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 mono">Encrypted RAM Buffer</p>
         </div>
       )}
 
@@ -429,14 +439,14 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
             <div className="flex flex-col gap-6">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-widest text-white/50">
-                  {reviewData ? 'Review Payload' : `Capturing ${recordingMode}`}
+                  {reviewData ? 'Validate Stream' : `Capturing ${recordingMode}`}
                 </span>
                 <span className="mono text-xs font-bold text-red-500">
-                  {reviewData ? 'READY' : `${recordingTime}s / 60s`}
+                  {reviewData ? 'READY' : `${recordingTime}s / ${MAX_VIDEO_DURATION_S}s`}
                 </span>
               </div>
 
-              <div className="aspect-video w-full rounded-2xl bg-black border border-white/5 overflow-hidden flex items-center justify-center relative">
+              <div className="aspect-video w-full rounded-2xl bg-black border border-white/5 overflow-hidden flex items-center justify-center relative shadow-inner">
                 {recordingMode === 'video' && (
                   <>
                     <video 
@@ -444,16 +454,16 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                       autoPlay 
                       muted 
                       playsInline 
-                      style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }} // MIRROR FRONT ONLY
+                      style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }} 
                       className="w-full h-full object-cover" 
                     />
                     <button 
                       onClick={toggleCamera}
-                      className="absolute bottom-4 right-4 p-3 bg-black/60 text-white rounded-full backdrop-blur-xl border border-white/10 hover:bg-black/80 transition-all active:scale-90 shadow-2xl z-10"
-                      title="Switch Camera"
+                      className="absolute bottom-4 right-4 p-4 bg-black/60 text-white rounded-full backdrop-blur-xl border border-white/10 hover:bg-black/80 transition-all active:scale-90 shadow-2xl z-20"
+                      title="Switch Sensor"
                     >
                       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                     </button>
                   </>
@@ -482,13 +492,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                       disabled={!!processingStatus}
                       className="flex-1 py-4 bg-white text-black font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-gray-200 transition-all active:scale-95 shadow-xl disabled:opacity-50"
                     >
-                      {processingStatus ? 'SENDING...' : 'Broadcast to Zone'}
+                      {processingStatus ? 'BROADCASTING...' : 'Broadcast to Zone'}
                     </button>
                     <button onClick={() => setReviewData(null)} disabled={!!processingStatus} className="px-6 py-4 bg-white/5 text-gray-400 font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-white/10 transition-all disabled:opacity-50">Discard</button>
                   </>
                 ) : (
                   <>
-                    <button onClick={stopRecording} className="flex-1 py-4 bg-red-500 text-white font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-red-600 transition-all active:scale-95 shadow-lg shadow-red-500/20">Finish Capture</button>
+                    <button onClick={stopRecording} className="flex-1 py-4 bg-red-500 text-white font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-red-600 transition-all active:scale-95 shadow-lg shadow-red-500/20">Finalize Capture</button>
                     <button onClick={cancelRecording} className="px-6 py-4 bg-white/5 text-gray-400 font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-white/10 transition-all">Cancel</button>
                   </>
                 )}
@@ -503,12 +513,17 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         <div className="max-w-4xl mx-auto flex flex-col gap-3">
           
           {processingStatus && (
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex items-center justify-between animate-pulse shadow-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">{processingStatus}</span>
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex flex-col gap-3 shadow-lg relative overflow-hidden">
+              <div className="flex items-center justify-between z-10">
+                <div className="flex items-center gap-3">
+                  <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">{processingStatus}</span>
+                </div>
+                <span className="text-[10px] font-bold text-blue-500/50 mono">TUNNEL ACTIVE</span>
               </div>
-              <span className="text-[10px] font-bold text-blue-500/50 mono">TRANSMITTING</span>
+              <div className="h-1.5 w-full bg-blue-500/10 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500 rounded-full animate-loading-bar origin-left"></div>
+              </div>
             </div>
           )}
 
@@ -531,7 +546,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                     handleSubmit();
                   }
                 }}
-                placeholder={isModerating ? "Verifying..." : "Message everyone..."}
+                placeholder={isModerating ? "Verifying safety..." : "Broadcast to everyone..."}
                 disabled={isModerating || !!processingStatus}
                 className="w-full bg-transparent px-5 py-4 focus:outline-none placeholder:text-gray-600 text-[16px] font-medium resize-none leading-relaxed text-white overflow-hidden"
               />
@@ -540,15 +555,15 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                 <div className="flex items-center gap-1.5">
                   <input type="file" ref={fileInputRef} className="hidden" accept="image/*,video/*" onChange={handleFileUpload} />
                   
-                  <button onClick={() => fileInputRef.current?.click()} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all">
+                  <button onClick={() => fileInputRef.current?.click()} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all active:scale-90">
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                   </button>
 
-                  <button onClick={startAudioRecording} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all">
+                  <button onClick={startAudioRecording} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all active:scale-90">
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m14 0v1a7 7 0 01-14 0v-1m14 0a7 7 0 00-7-7 7 7 0 00-7 7m7 5V4m0 0L8 8m4-4l4 4" /></svg>
                   </button>
 
-                  <button onClick={() => startVideoRecording('user')} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all">
+                  <button onClick={() => startVideoRecording('user')} className="w-10 h-10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all active:scale-90">
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2-2v8a2 2 0 002 2z" /></svg>
                   </button>
                 </div>
@@ -557,7 +572,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
                   onClick={handleSubmit}
                   disabled={!input.trim() || isModerating || !!processingStatus}
                   className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${
-                    input.trim() && !isModerating && !processingStatus ? 'bg-white text-black shadow-xl scale-100' : 'bg-white/5 text-gray-700 scale-90 opacity-50'
+                    input.trim() && !isModerating && !processingStatus ? 'bg-white text-black shadow-xl scale-100 active:scale-90' : 'bg-white/5 text-gray-700 scale-90 opacity-50'
                   }`}
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 12h14M12 5l7 7-7 7" /></svg>
