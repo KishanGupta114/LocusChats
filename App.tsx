@@ -20,6 +20,12 @@ const FINGERPRINT = Math.random().toString(36).substr(2, 12);
 const TYPING_EXPIRY_MS = 4000;
 const PRESENCE_INTERVAL_MS = 15000;
 
+interface LoadingState {
+  active: boolean;
+  message: string;
+  subMessage?: string;
+}
+
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
     currentZone: null,
@@ -42,6 +48,9 @@ const App: React.FC = () => {
   const [activeMembers, setActiveMembers] = useState<Set<string>>(new Set());
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
   
+  // UI Only: Global Loading state
+  const [loading, setLoading] = useState<LoadingState>({ active: false, message: '' });
+
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
   const typingTimeoutRef = useRef<any>(null);
@@ -101,12 +110,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      const currentLocation = userLocation; // Capture current state to avoid closure issues
+      const currentLocation = userLocation; 
 
       setState(prev => {
         let changed = false;
         
-        // Prune stale typing indicators
         const newTyping = { ...prev.typingUsers };
         Object.keys(newTyping).forEach(username => {
           if (now - newTyping[username] > TYPING_EXPIRY_MS) {
@@ -115,12 +123,10 @@ const App: React.FC = () => {
           }
         });
 
-        // Prune expired rooms OR rooms that are now out of range from discovery list
         const filteredRooms = prev.availableRooms.filter(room => {
           const isExpired = room.expiresAt <= now;
           if (isExpired) return false;
           
-          // Re-verify range every second to ensure list is always accurate if user is moving
           if (currentLocation) {
             const dist = calculateDistance(currentLocation.lat, currentLocation.lng, room.center.lat, room.center.lng);
             return dist <= RADIUS_KM;
@@ -310,8 +316,15 @@ const App: React.FC = () => {
   };
 
   const createRoom = async (name: string, type: RoomType, username: string, password?: string) => {
+    setLoading({ active: true, message: "INITIALIZING SENSORS", subMessage: "Requesting geolocation lock..." });
+    
     try {
       const pos = await getCurrentPosition();
+      setLoading(l => ({ ...l, message: "GENERATING SECURE TUNNEL", subMessage: "Establishing ephemeral frequency..." }));
+      
+      // Artificial delay for UX "realism"
+      await new Promise(resolve => setTimeout(resolve, 800));
+
       const now = Date.now();
       const id = Math.random().toString(36).substr(2, 9);
       const pwdHash = (type === 'private' && password) ? await hashPassword(password) : undefined;
@@ -333,16 +346,28 @@ const App: React.FC = () => {
       enterZone(zone, username, true);
     } catch (e) {
       alert("Location required to initialize a Zone.");
+    } finally {
+      setTimeout(() => setLoading({ active: false, message: "" }), 500);
     }
   };
 
   const joinRoom = async (zone: Zone, username: string, password?: string) => {
+    setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying proximity and credentials..." });
+    
+    // Perceived delay
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
     if (zone.type === 'private' && zone.passwordHash) {
       const inputHash = await hashPassword(password || '');
-      if (inputHash !== zone.passwordHash) return alert("Access Denied.");
+      if (inputHash !== zone.passwordHash) {
+        setLoading({ active: false, message: "" });
+        return alert("Access Denied.");
+      }
       setRoomPassword(password || '');
     }
+    
     enterZone(zone, username, zone.hostId === FINGERPRINT);
+    setTimeout(() => setLoading({ active: false, message: "" }), 500);
   };
 
   const enterZone = (zone: Zone, username: string, isHost: boolean) => {
@@ -368,7 +393,12 @@ const App: React.FC = () => {
     }
   };
 
-  const handleExit = () => {
+  const handleExit = async () => {
+    setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Scrubbing transient RAM buffers..." });
+    
+    // Smooth exit delay
+    await new Promise(resolve => setTimeout(resolve, 800));
+
     setState(prev => ({
       ...prev,
       currentZone: null, currentUser: null, messages: [], isHost: false,
@@ -378,9 +408,12 @@ const App: React.FC = () => {
     setUnreadCount(0);
     setActiveMembers(new Set());
     setShowExitConfirm(false);
+    
     const url = new URL(window.location.href);
     url.searchParams.delete('zoneId');
     window.history.replaceState({}, '', url.toString());
+
+    setTimeout(() => setLoading({ active: false, message: "" }), 400);
   };
 
   const handleShare = async () => {
@@ -438,6 +471,23 @@ const App: React.FC = () => {
 
   return (
     <div ref={appRef} className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden">
+      {/* Global Transition Overlay */}
+      {loading.active && (
+        <div className="fixed inset-0 z-[200] bg-black flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
+          <div className="max-w-xs w-full flex flex-col items-center">
+            <div className="w-full h-1 bg-white/5 rounded-full mb-8 overflow-hidden relative">
+              <div className="absolute inset-y-0 bg-white animate-loading-bar w-1/3"></div>
+            </div>
+            <h2 className="text-white text-[11px] font-black uppercase tracking-[0.4em] mb-3 text-center animate-pulse">
+              {loading.message}
+            </h2>
+            <p className="text-gray-600 text-[9px] font-bold uppercase tracking-widest text-center mono">
+              {loading.subMessage || 'Please Wait'}
+            </p>
+          </div>
+        </div>
+      )}
+
       <Header 
         zone={state.currentZone} 
         timeLeft={state.timeLeft} 
@@ -456,6 +506,7 @@ const App: React.FC = () => {
             onCreate={createRoom} 
             rooms={state.availableRooms}
             deepLinkedZoneId={pendingZoneId}
+            isLoading={loading.active}
           />
         ) : (
           <ChatRoom 
@@ -475,8 +526,20 @@ const App: React.FC = () => {
               <h2 className="text-xl font-bold mb-3 text-white">Leave Zone?</h2>
               <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest">Local chat buffer will be cleared.</p>
               <div className="flex flex-col w-full gap-3">
-                <button onClick={handleExit} className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px]">Exit Now</button>
-                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px]">Cancel</button>
+                <button 
+                  onClick={handleExit} 
+                  disabled={loading.active}
+                  className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px] disabled:opacity-50"
+                >
+                  Exit Now
+                </button>
+                <button 
+                  onClick={() => setShowExitConfirm(false)} 
+                  disabled={loading.active}
+                  className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
               </div>
            </div>
         </div>

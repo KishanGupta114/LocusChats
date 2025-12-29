@@ -9,9 +9,10 @@ interface JoinScreenProps {
   onCreate: (name: string, type: RoomType, username: string, password?: string) => void;
   rooms: Zone[];
   deepLinkedZoneId?: string | null;
+  isLoading?: boolean;
 }
 
-const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLinkedZoneId }) => {
+const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLinkedZoneId, isLoading = false }) => {
   const [advice, setAdvice] = useState<string>("Initializing secure discovery...");
   const [view, setView] = useState<'browse' | 'create'>('browse');
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
@@ -48,6 +49,7 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
   }, [deepLinkedZoneId, rooms, selectedRoom]);
 
   const handleCreate = () => {
+    if (isLoading) return;
     if (!newUsername.trim()) return alert("Handle required for identification.");
     if (!newName.trim()) return alert("Zone name required.");
     if (newType === 'private' && !newPass) return alert("Access Key required for private zones.");
@@ -55,7 +57,7 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
   };
 
   const handleJoinFinal = () => {
-    if (!selectedRoom) return;
+    if (isLoading || !selectedRoom) return;
     if (!joinUsername.trim()) return alert("Please set your handle first.");
     if (selectedRoom.type === 'private' && !joinPass) return alert("Password required.");
     onJoin(selectedRoom, joinUsername, joinPass);
@@ -81,13 +83,15 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
         <div className="flex gap-2 p-1.5 bg-white/5 rounded-2xl mb-8 border border-white/5">
           <button 
             onClick={() => setView('browse')}
-            className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${view === 'browse' ? 'bg-white text-black shadow-lg' : 'text-gray-500 hover:text-white'}`}
+            disabled={isLoading}
+            className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${view === 'browse' ? 'bg-white text-black shadow-lg' : 'text-gray-500 hover:text-white'} disabled:opacity-50`}
           >
             Discovery List
           </button>
           <button 
             onClick={() => setView('create')}
-            className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${view === 'create' ? 'bg-white text-black shadow-lg' : 'text-gray-500 hover:text-white'}`}
+            disabled={isLoading}
+            className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${view === 'create' ? 'bg-white text-black shadow-lg' : 'text-gray-500 hover:text-white'} disabled:opacity-50`}
           >
             Initialize Zone
           </button>
@@ -111,12 +115,13 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
                 return (
                   <button 
                     key={room.id}
-                    onClick={() => setSelectedRoom(room)}
-                    className="w-full text-left glass border border-white/10 p-5 rounded-3xl flex items-center justify-between hover:border-white/30 transition-all active:scale-98"
+                    onClick={() => !isLoading && setSelectedRoom(room)}
+                    disabled={isLoading}
+                    className="w-full text-left glass border border-white/10 p-5 rounded-3xl flex items-center justify-between hover:border-white/30 transition-all active:scale-98 disabled:opacity-50"
                   >
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-black tracking-tight uppercase">{room.name}</span>
+                        <span className="text-sm font-black tracking-tight uppercase text-white">{room.name}</span>
                         {room.type === 'private' && (
                           <svg className="w-3 h-3 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
                         )}
@@ -140,8 +145,9 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
               <input 
                 value={newUsername}
                 onChange={e => setNewUsername(e.target.value)}
+                disabled={isLoading}
                 placeholder="E.G. GHOST_SIGNAL"
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 focus:outline-none focus:border-white/30 text-white font-bold uppercase"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 focus:outline-none focus:border-white/30 text-white font-bold uppercase disabled:opacity-50"
               />
             </div>
             <div>
@@ -149,15 +155,16 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
               <input 
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
+                disabled={isLoading}
                 placeholder="E.G. DATA_BUNKER"
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 focus:outline-none focus:border-white/30 text-white font-bold uppercase"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 focus:outline-none focus:border-white/30 text-white font-bold uppercase disabled:opacity-50"
               />
             </div>
             <div>
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2 block">Zone Visibility</label>
               <div className="flex gap-2">
-                <button onClick={() => setNewType('public')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newType === 'public' ? 'bg-white text-black shadow-lg' : 'bg-white/5 text-gray-500'}`}>Public</button>
-                <button onClick={() => setNewType('private')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newType === 'private' ? 'bg-red-500 text-white shadow-lg' : 'bg-white/5 text-gray-500'}`}>Private</button>
+                <button onClick={() => setNewType('public')} disabled={isLoading} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newType === 'public' ? 'bg-white text-black shadow-lg' : 'bg-white/5 text-gray-500'} disabled:opacity-50`}>Public</button>
+                <button onClick={() => setNewType('private')} disabled={isLoading} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newType === 'private' ? 'bg-red-500 text-white shadow-lg' : 'bg-white/5 text-gray-500'} disabled:opacity-50`}>Private</button>
               </div>
             </div>
             {newType === 'private' && (
@@ -167,14 +174,16 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
                   type="password"
                   value={newPass}
                   onChange={e => setNewPass(e.target.value)}
+                  disabled={isLoading}
                   placeholder="MIN 4 CHARACTERS"
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 focus:outline-none focus:border-white/30 text-white font-bold"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 focus:outline-none focus:border-white/30 text-white font-bold disabled:opacity-50"
                 />
               </div>
             )}
             <button 
               onClick={handleCreate} 
-              className="w-full py-5 bg-white text-black font-black uppercase tracking-widest text-[11px] rounded-2xl active:scale-95 transition-all shadow-xl"
+              disabled={isLoading}
+              className="w-full py-5 bg-white text-black font-black uppercase tracking-widest text-[11px] rounded-2xl active:scale-95 transition-all shadow-xl disabled:opacity-50"
             >
               Initialize Zone
             </button>
@@ -202,8 +211,9 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
                     autoFocus
                     value={joinUsername}
                     onChange={e => setJoinUsername(e.target.value)}
+                    disabled={isLoading}
                     placeholder="ENTER HANDLE"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-white/30 text-center text-white font-bold uppercase text-sm"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-white/30 text-center text-white font-bold uppercase text-sm disabled:opacity-50"
                   />
                 </div>
                 
@@ -214,8 +224,9 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
                       type="password"
                       value={joinPass}
                       onChange={e => setJoinPass(e.target.value)}
+                      disabled={isLoading}
                       placeholder="PASSWORD"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-white/30 text-center text-white font-bold text-sm"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-white/30 text-center text-white font-bold text-sm disabled:opacity-50"
                     />
                   </div>
                 )}
@@ -224,13 +235,15 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
               <div className="flex flex-col gap-3">
                 <button 
                   onClick={handleJoinFinal} 
-                  className="w-full py-4 bg-white text-black font-black uppercase tracking-widest text-[10px] rounded-xl active:scale-95 shadow-xl transition-all"
+                  disabled={isLoading}
+                  className="w-full py-4 bg-white text-black font-black uppercase tracking-widest text-[10px] rounded-xl active:scale-95 shadow-xl transition-all disabled:opacity-50"
                 >
                   Verify & Enter
                 </button>
                 <button 
-                  onClick={() => { setSelectedRoom(null); setJoinUsername(''); setJoinPass(''); }} 
-                  className="w-full py-4 bg-white/5 text-gray-500 font-black uppercase tracking-widest text-[10px] rounded-xl hover:bg-white/10 transition-all"
+                  onClick={() => { if(!isLoading) { setSelectedRoom(null); setJoinUsername(''); setJoinPass(''); } }} 
+                  disabled={isLoading}
+                  className="w-full py-4 bg-white/5 text-gray-500 font-black uppercase tracking-widest text-[10px] rounded-xl hover:bg-white/10 transition-all disabled:opacity-50"
                 >
                   Cancel
                 </button>
