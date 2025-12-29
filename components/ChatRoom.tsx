@@ -17,9 +17,7 @@ interface ChatRoomProps {
 const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers, onSendMessage, onTyping, onRead }) => {
   const [input, setInput] = useState('');
   const [isModerating, setIsModerating] = useState(false);
-  const [recordingMode, setRecordingMode] = useState<'none' | 'audio' | 'video'>('none');
   const [reviewData, setReviewData] = useState<{ type: MediaType; data: string } | null>(null);
-  const [recordingTime, setRecordingTime] = useState(0);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [fullScreenMedia, setFullScreenMedia] = useState<string | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -28,11 +26,6 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
   const scrollRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const videoPreviewRef = useRef<HTMLVideoElement>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<any>(null);
-  const streamRef = useRef<MediaStream | null>(null);
 
   const activeTypingList = Object.keys(typingUsers).filter(u => u !== currentUser?.username);
 
@@ -103,12 +96,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
       <p className="text-[10px] font-black text-gray-600 uppercase tracking-[0.3em] mb-10">Secure Ephemeral Tunnel Active</p>
       <div className="max-w-[200px] mx-auto grid grid-cols-2 gap-6">
         <div className="text-center">
-          <span className="block text-[8px] font-black text-gray-700 uppercase tracking-widest mb-1.5">Encryption</span>
-          <span className="block text-[9px] font-bold text-white/40 mono uppercase">Transient</span>
+          <span className="block text-[8px] font-black text-gray-700 uppercase tracking-widest mb-1.5 text-center">Encryption</span>
+          <span className="block text-[9px] font-bold text-white/40 mono uppercase text-center">Transient</span>
         </div>
         <div className="text-center">
-          <span className="block text-[8px] font-black text-gray-700 uppercase tracking-widest mb-1.5">Storage</span>
-          <span className="block text-[9px] font-bold text-white/40 mono uppercase">Volatile</span>
+          <span className="block text-[8px] font-black text-gray-700 uppercase tracking-widest mb-1.5 text-center">Storage</span>
+          <span className="block text-[9px] font-bold text-white/40 mono uppercase text-center">Volatile</span>
         </div>
       </div>
     </div>
@@ -212,7 +205,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
 
       {reviewData && (
         <div className="fixed inset-0 z-[101] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-8 animate-in zoom-in duration-300">
-          <h2 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/30 mb-12">Review Broadcast Payload</h2>
+          <h2 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/30 mb-12 text-center">Review Broadcast Payload</h2>
           <div className="w-full max-w-lg mb-12 glass border border-white/10 rounded-[2.5rem] overflow-hidden shadow-2xl">
             {reviewData.type === 'image' && <img src={reviewData.data} alt="Review" className="w-full h-auto max-h-[60vh] object-contain" />}
           </div>

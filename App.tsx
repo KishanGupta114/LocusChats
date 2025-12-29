@@ -19,7 +19,6 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
-const TYPING_EXPIRY_MS = 4000;
 
 interface LoadingState {
   active: boolean;
@@ -57,10 +56,10 @@ const App: React.FC = () => {
     stateRef.current = state;
   }, [state]);
 
-  // Track remaining time
+  // Periodic session time update
   useEffect(() => {
     if (!state.currentZone) return;
-    const timer = setInterval(() => {
+    const interval = setInterval(() => {
       const remaining = stateRef.current.currentZone!.expiresAt - Date.now();
       if (remaining <= 0) {
         handleExit();
@@ -68,41 +67,64 @@ const App: React.FC = () => {
         setState(prev => ({ ...prev, timeLeft: remaining }));
       }
     }, 1000);
-    return () => clearInterval(timer);
+    return () => clearInterval(interval);
   }, [state.currentZone?.id]);
 
+  // Reliable Location Tracking
   useEffect(() => {
     const updateLocation = async () => {
       try {
         const pos = await getCurrentPosition();
-        setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setUserLocation({ lat, lng });
+
+        // Request rooms if location just arrived and we are connected
+        if (!userLocation && mqttClientRef.current?.connected) {
+          mqttClientRef.current.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+        }
+
         if (stateRef.current.currentZone) {
-          const d = calculateDistance(pos.coords.latitude, pos.coords.longitude, stateRef.current.currentZone.center.lat, stateRef.current.currentZone.center.lng);
+          const d = calculateDistance(lat, lng, stateRef.current.currentZone.center.lat, stateRef.current.currentZone.center.lng);
           setState(prev => ({ ...prev, distance: d }));
         }
       } catch (e) {
-        console.warn("Location unavailable.");
+        console.warn("Location check failed", e);
       }
     };
+
     updateLocation();
     const locInterval = setInterval(updateLocation, LOCATION_CHECK_INTERVAL_MS);
     return () => clearInterval(locInterval);
   }, []);
 
+  // Handle room discovery logic
   const handleDiscoveryPulse = (room: Zone) => {
     const now = Date.now();
     if (room.expiresAt <= now) return;
+    
     setState(prev => {
       const isCurrentZone = prev.currentZone?.id === room.id;
       const others = prev.availableRooms.filter(r => r.id !== room.id);
+      
       let inRange = true;
       if (userLocation) {
         const dist = calculateDistance(userLocation.lat, userLocation.lng, room.center.lat, room.center.lng);
         inRange = dist <= RADIUS_KM;
       }
-      const updatedRooms = inRange ? [...others, room] : others;
-      const updatedCurrentZone = isCurrentZone ? { ...prev.currentZone, userCount: room.userCount } : prev.currentZone;
-      return { ...prev, availableRooms: updatedRooms, currentZone: updatedCurrentZone as Zone | null };
+
+      const updatedRooms = inRange ? [...others, room].sort((a,b) => b.createdAt - a.createdAt) : others;
+      
+      // If this pulse is for our own room, update local count
+      const updatedCurrentZone = isCurrentZone 
+        ? { ...prev.currentZone, userCount: Math.max(prev.currentZone?.userCount || 1, room.userCount) } 
+        : prev.currentZone;
+
+      return { 
+        ...prev, 
+        availableRooms: updatedRooms, 
+        currentZone: updatedCurrentZone as Zone | null 
+      };
     });
   };
 
@@ -113,6 +135,8 @@ const App: React.FC = () => {
     switch (data.type) {
       case 'message':
         const msg = data.payload;
+        if (stateRef.current.isHost && msg.sender) activeMembersRef.current.add(msg.sender);
+        
         setState(prev => {
           if (prev.messages.some(m => m.id === msg.id)) return prev;
           if (!msg.isSystem && msg.sender !== prev.currentUser?.username) {
@@ -125,7 +149,9 @@ const App: React.FC = () => {
         });
         break;
       case 'presence':
-        if (stateRef.current.isHost) activeMembersRef.current.add(data.sender);
+        if (stateRef.current.isHost) {
+          activeMembersRef.current.add(data.sender);
+        }
         break;
       case 'count_sync':
         setState(prev => prev.currentZone ? ({ ...prev, currentZone: { ...prev.currentZone, userCount: data.count } }) : prev);
@@ -162,34 +188,76 @@ const App: React.FC = () => {
     client.on('connect', () => {
       setConnectionStatus('connected');
       client.subscribe(DISCOVERY_TOPIC);
+      client.subscribe(DISCOVERY_REQ_TOPIC);
+      
+      // Request initial list
       client.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+
       if (stateRef.current.currentZone) {
         const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
         client.subscribe(roomTopic);
         client.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
+        client.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
       }
     });
 
     client.on('message', (topic, payload) => {
       try {
         const data = JSON.parse(payload.toString());
-        if (topic === DISCOVERY_TOPIC) handleDiscoveryPulse(data);
-        else if (topic === DISCOVERY_REQ_TOPIC && stateRef.current.isHost && data.sender !== FINGERPRINT) broadcastHostZone();
-        else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) handleRoomEvent(data);
+        if (topic === DISCOVERY_TOPIC) {
+          handleDiscoveryPulse(data);
+        } else if (topic === DISCOVERY_REQ_TOPIC) {
+          if (stateRef.current.isHost && data.sender !== FINGERPRINT) {
+            broadcastHostZone();
+          }
+        } else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) {
+          handleRoomEvent(data);
+        }
       } catch (e) { console.error("MQTT data error", e); }
     });
 
     mqttClientRef.current = client;
     return () => client && client.end(true);
-  }, [state.currentZone?.id]);
+  }, [state.currentZone?.id, state.isHost]);
 
   const broadcastHostZone = () => {
-    if (!stateRef.current.isHost || !stateRef.current.currentZone || !mqttClientRef.current) return;
+    if (!stateRef.current.isHost || !stateRef.current.currentZone || !mqttClientRef.current?.connected) return;
+    
     const currentCount = Math.max(1, activeMembersRef.current.size);
-    mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify({ ...stateRef.current.currentZone, userCount: currentCount }));
-    mqttClientRef.current.publish(`locuschat/v2/rooms/${stateRef.current.currentZone.id}`, JSON.stringify({ type: 'count_sync', count: currentCount }));
+    const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
+    
+    mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify({ 
+      ...stateRef.current.currentZone, 
+      userCount: currentCount 
+    }));
+    
+    mqttClientRef.current.publish(roomTopic, JSON.stringify({ 
+      type: 'count_sync', 
+      count: currentCount 
+    }));
+
+    // Reset member detection window
     activeMembersRef.current = new Set([FINGERPRINT]);
   };
+
+  // Host: Periodic Discovery Refresh & Member Sync
+  useEffect(() => {
+    if (!state.isHost || !state.currentZone) return;
+    const interval = setInterval(broadcastHostZone, DISCOVERY_PULSE_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [state.isHost, state.currentZone?.id]);
+
+  // Client: Periodic Presence Pulse
+  useEffect(() => {
+    if (!state.currentZone || !mqttClientRef.current) return;
+    const interval = setInterval(() => {
+      if (mqttClientRef.current.connected) {
+        const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone?.id}`;
+        mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
+      }
+    }, 10000); // 10s heartbeat
+    return () => clearInterval(interval);
+  }, [state.currentZone?.id]);
 
   const hashPassword = async (pwd: string) => {
     const msgUint8 = new TextEncoder().encode(pwd + "locus-salt");
@@ -286,25 +354,34 @@ const App: React.FC = () => {
         payload: { id: `sys_join_${Date.now()}`, sender: newUser.username, timestamp: Date.now(), isSystem: true, systemType: 'join', type: 'system' } 
       }));
       mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
+      mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
     }
   };
 
   const handleExit = async () => {
+    const finalize = () => {
+      setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Purging RAM buffer cache..." });
+      setState(prev => ({ ...prev, currentZone: null, currentUser: null, messages: [], isHost: false, timeLeft: SESSION_DURATION_MS }));
+      setRoomPassword('');
+      setShowExitConfirm(false);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('zoneId');
+      window.history.replaceState({}, '', url.toString());
+      setTimeout(() => setLoading({ active: false, message: "" }), 800);
+    };
+
     if (mqttClientRef.current?.connected && state.currentZone && state.currentUser) {
       const roomTopic = `locuschat/v2/rooms/${state.currentZone.id}`;
       mqttClientRef.current.publish(roomTopic, JSON.stringify({ 
         type: 'message', 
         payload: { id: `sys_leave_${Date.now()}`, sender: state.currentUser.username, timestamp: Date.now(), isSystem: true, systemType: 'leave', type: 'system' } 
-      }));
+      }), () => {
+        finalize();
+      });
+      setTimeout(finalize, 800); // Safety timeout
+    } else {
+      finalize();
     }
-    setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Purging RAM buffer cache..." });
-    setState(prev => ({ ...prev, currentZone: null, currentUser: null, messages: [], isHost: false, timeLeft: SESSION_DURATION_MS }));
-    setRoomPassword('');
-    setShowExitConfirm(false);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('zoneId');
-    window.history.replaceState({}, '', url.toString());
-    setTimeout(() => setLoading({ active: false, message: "" }), 800);
   };
 
   const sendMessage = async (text: string, type: MediaType = 'text', mediaData?: string) => {
@@ -348,7 +425,7 @@ const App: React.FC = () => {
 
       {showExitConfirm && (
         <div className="absolute inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md p-6 animate-in fade-in duration-300">
-           <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center">
+           <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center shadow-2xl">
               <h2 className="text-xl font-bold mb-3 text-white">Leave Zone?</h2>
               <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest text-center">Your local chat session data will be permanently purged.</p>
               <div className="flex flex-col w-full gap-3">
