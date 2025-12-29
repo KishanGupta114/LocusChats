@@ -18,6 +18,9 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
+// Pre-generate a default handle for instant joining
+const DEFAULT_HANDLE = `NODE_${FINGERPRINT.slice(0, 4).toUpperCase()}`;
+
 const TYPING_EXPIRY_MS = 4000;
 const PRESENCE_HEARTBEAT_MS = 10000; 
 
@@ -45,7 +48,7 @@ const App: React.FC = () => {
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [unreadCount, setUnreadCount] = useState(0);
-  const [pendingZoneId, setPendingZoneId] = useState<string | null>(null);
+  const [pendingZone, setPendingZone] = useState<Zone | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
   
   const [loading, setLoading] = useState<LoadingState>({ active: false, message: '' });
@@ -85,8 +88,22 @@ const App: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const zId = params.get('zoneId');
-    if (zId) {
-      setPendingZoneId(zId);
+    const zName = params.get('n');
+    const zType = params.get('t') as RoomType;
+
+    if (zId && zName && zType) {
+      // Hydrate a virtual zone so we can show the join screen instantly 
+      // without waiting for the first MQTT discovery pulse
+      setPendingZone({
+        id: zId,
+        name: decodeURIComponent(zName),
+        type: zType,
+        hostId: 'remote',
+        center: { lat: 0, lng: 0 },
+        createdAt: Date.now(),
+        expiresAt: Date.now() + SESSION_DURATION_MS,
+        userCount: 1
+      });
     }
   }, []);
 
@@ -314,7 +331,7 @@ const App: React.FC = () => {
     try {
       const pos = await getCurrentPosition();
       setLoading(l => ({ ...l, message: "GENERATING SECURE TUNNEL", subMessage: "Establishing ephemeral frequency..." }));
-      await new Promise(resolve => setTimeout(resolve, 800));
+      
       const now = Date.now();
       const id = Math.random().toString(36).substr(2, 9);
       const pwdHash = (type === 'private' && password) ? await hashPassword(password) : undefined;
@@ -329,13 +346,13 @@ const App: React.FC = () => {
     } catch (e) {
       alert("Location required to initialize a Zone.");
     } finally {
-      setTimeout(() => setLoading({ active: false, message: "" }), 500);
+      setLoading({ active: false, message: "" });
     }
   };
 
   const joinRoom = async (zone: Zone, username: string, password?: string) => {
     setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying proximity and credentials..." });
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     if (zone.type === 'private' && zone.passwordHash) {
       const inputHash = await hashPassword(password || '');
       if (inputHash !== zone.passwordHash) {
@@ -344,13 +361,14 @@ const App: React.FC = () => {
       }
       setRoomPassword(password || '');
     }
+    
     enterZone(zone, username, zone.hostId === FINGERPRINT);
-    setTimeout(() => setLoading({ active: false, message: "" }), 500);
+    setLoading({ active: false, message: "" });
   };
 
   const enterZone = (zone: Zone, username: string, isHost: boolean) => {
     const newUser: User = {
-      username: username.toUpperCase(),
+      username: (username || DEFAULT_HANDLE).toUpperCase(),
       color: COLORS[Math.floor(Math.random() * COLORS.length)]
     };
     setState(prev => ({
@@ -358,7 +376,7 @@ const App: React.FC = () => {
       messages: [], timeLeft: zone.expiresAt - Date.now(),
     }));
     setUnreadCount(0);
-    setPendingZoneId(null);
+    setPendingZone(null);
     if (mqttClientRef.current) {
        const roomTopic = `locuschat/v2/rooms/${zone.id}`;
        mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
@@ -368,7 +386,6 @@ const App: React.FC = () => {
 
   const handleExit = async () => {
     setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Scrubbing transient RAM buffers..." });
-    await new Promise(resolve => setTimeout(resolve, 800));
     setState(prev => ({
       ...prev, currentZone: null, currentUser: null, messages: [], isHost: false,
       timeLeft: SESSION_DURATION_MS, typingUsers: {}, distance: null,
@@ -379,13 +396,16 @@ const App: React.FC = () => {
     setShowExitConfirm(false);
     const url = new URL(window.location.href);
     url.searchParams.delete('zoneId');
+    url.searchParams.delete('n');
+    url.searchParams.delete('t');
     window.history.replaceState({}, '', url.toString());
-    setTimeout(() => setLoading({ active: false, message: "" }), 400);
+    setLoading({ active: false, message: "" });
   };
 
   const handleShare = async () => {
     if (state.currentZone) {
-      const shareUrl = `${window.location.origin}${window.location.pathname}?zoneId=${state.currentZone.id}`;
+      // Append name and type metadata so the receiver hydrates instantly
+      const shareUrl = `${window.location.origin}${window.location.pathname}?zoneId=${state.currentZone.id}&n=${encodeURIComponent(state.currentZone.name)}&t=${state.currentZone.type}`;
       if (navigator.share) {
         try {
           await navigator.share({ title: 'Locus Chat Invitation', text: `Join "${state.currentZone.name}"`, url: shareUrl });
@@ -439,9 +459,9 @@ const App: React.FC = () => {
           <>
             <JoinScreen 
               onJoin={joinRoom} onCreate={createRoom} rooms={state.availableRooms}
-              deepLinkedZoneId={pendingZoneId} isLoading={loading.active}
+              deepLinkedZone={pendingZone} isLoading={loading.active}
+              defaultHandle={DEFAULT_HANDLE}
             />
-            {/* Footer only appears in the discovery/join feed */}
             <Footer 
               status={connectionStatus} timeLeft={state.timeLeft}
               totalTime={SESSION_DURATION_MS} distance={state.distance} fingerprint={FINGERPRINT}
