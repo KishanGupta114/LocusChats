@@ -353,72 +353,93 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ messages, currentUser, typingUsers,
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto px-4 py-4 sm:px-8 space-y-6 no-scrollbar"
       >
-        {messages.map((msg, idx) => {
-          const isMe = msg.sender === currentUser?.username;
-          const showSender = idx === 0 || messages[idx-1].sender !== msg.sender || messages[idx-1].isSystem;
+        {messages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-700">
+            <div className="w-20 h-20 bg-white/[0.03] border border-white/5 rounded-full flex items-center justify-center mb-6 relative">
+              <div className="absolute inset-0 border border-white/10 rounded-full animate-ping opacity-20"></div>
+              <svg className="w-8 h-8 text-white/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+              </svg>
+            </div>
+            <div className="space-y-2 mb-8">
+              <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-white/40 mono">Zone Initialized</h3>
+              <p className="text-[15px] font-medium text-gray-500">Connected to the local frequency.</p>
+              <p className="text-[15px] font-medium text-white/80">Start the conversation. Say hi 👋</p>
+            </div>
+            <div className="max-w-xs py-4 px-6 bg-white/[0.02] border border-white/5 rounded-3xl">
+              <p className="text-[9px] font-black uppercase tracking-widest text-gray-600 leading-relaxed">
+                Be respectful. This chat ends in 2 hours.<br/>All data is permanently purged upon exit.
+              </p>
+            </div>
+          </div>
+        ) : (
+          messages.map((msg, idx) => {
+            const isMe = msg.sender === currentUser?.username;
+            const showSender = idx === 0 || messages[idx-1].sender !== msg.sender || messages[idx-1].isSystem;
 
-          if (msg.isSystem) {
+            if (msg.isSystem) {
+              return (
+                <div key={msg.id} className="flex justify-center my-6">
+                  <span className="text-[9px] mono uppercase tracking-[0.3em] text-gray-600 font-bold bg-white/[0.03] px-4 py-1 rounded-full">
+                    {msg.text}
+                  </span>
+                </div>
+              );
+            }
+
             return (
-              <div key={msg.id} className="flex justify-center my-6">
-                <span className="text-[9px] mono uppercase tracking-[0.3em] text-gray-600 font-bold bg-white/[0.03] px-4 py-1 rounded-full">
-                  {msg.text}
+              <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message`}>
+                {showSender && (
+                  <div className={`flex items-baseline gap-2 mb-1 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
+                    <span className={`text-[10px] font-black uppercase tracking-widest ${isMe ? 'text-white' : 'text-gray-500'}`}>
+                      {msg.sender}
+                    </span>
+                  </div>
+                )}
+                
+                <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-2xl transition-all ${
+                  isMe ? 'bubble-me rounded-tr-none' : 'bubble-them text-gray-200 rounded-tl-none'
+                }`}>
+                  {msg.type === 'text' && <div className="px-4 py-3 text-[15px] font-medium leading-relaxed break-words whitespace-pre-wrap">{msg.text}</div>}
+                  
+                  {msg.type === 'image' && (
+                    <img 
+                      src={msg.mediaData} 
+                      alt="Shared content" 
+                      className="max-h-[60vh] w-auto object-contain cursor-pointer active:scale-98 transition-transform"
+                      onClick={() => setFullScreenMedia(msg.mediaData || null)}
+                    />
+                  )}
+                  
+                  {msg.type === 'video' && (
+                    <div className="relative group">
+                      <video 
+                        controls 
+                        playsInline 
+                        style={{ transform: 'none' }} 
+                        className="max-h-[60vh] w-full bg-black"
+                        onError={() => alert("Secure playback failed. Media may have expired from RAM.")}
+                      >
+                        <source src={msg.mediaData} />
+                      </video>
+                    </div>
+                  )}
+                  
+                  {msg.type === 'audio' && (
+                    <div className="px-4 py-3 min-w-[240px] bg-white/5 flex flex-col gap-1">
+                      <audio controls className="w-full h-10 scale-95 invert contrast-125">
+                        <source src={msg.mediaData} />
+                      </audio>
+                    </div>
+                  )}
+                </div>
+                <span className="text-[8px] text-gray-700 font-bold mono mt-1 px-1">
+                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
             );
-          }
-
-          return (
-            <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message`}>
-              {showSender && (
-                <div className={`flex items-baseline gap-2 mb-1 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
-                  <span className={`text-[10px] font-black uppercase tracking-widest ${isMe ? 'text-white' : 'text-gray-500'}`}>
-                    {msg.sender}
-                  </span>
-                </div>
-              )}
-              
-              <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-2xl transition-all ${
-                isMe ? 'bubble-me rounded-tr-none' : 'bubble-them text-gray-200 rounded-tl-none'
-              }`}>
-                {msg.type === 'text' && <div className="px-4 py-3 text-[15px] font-medium leading-relaxed break-words whitespace-pre-wrap">{msg.text}</div>}
-                
-                {msg.type === 'image' && (
-                  <img 
-                    src={msg.mediaData} 
-                    alt="Shared content" 
-                    className="max-h-[60vh] w-auto object-contain cursor-pointer active:scale-98 transition-transform"
-                    onClick={() => setFullScreenMedia(msg.mediaData || null)}
-                  />
-                )}
-                
-                {msg.type === 'video' && (
-                  <div className="relative group">
-                    <video 
-                      controls 
-                      playsInline 
-                      style={{ transform: 'none' }} 
-                      className="max-h-[60vh] w-full bg-black"
-                      onError={() => alert("Secure playback failed. Media may have expired from RAM.")}
-                    >
-                      <source src={msg.mediaData} />
-                    </video>
-                  </div>
-                )}
-                
-                {msg.type === 'audio' && (
-                  <div className="px-4 py-3 min-w-[240px] bg-white/5 flex flex-col gap-1">
-                    <audio controls className="w-full h-10 scale-95 invert contrast-125">
-                      <source src={msg.mediaData} />
-                    </audio>
-                  </div>
-                )}
-              </div>
-              <span className="text-[8px] text-gray-700 font-bold mono mt-1 px-1">
-                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            </div>
-          );
-        })}
+          })
+        )}
         
         {activeTypingList.length > 0 && (
           <div className="flex items-start animate-message">
