@@ -33,24 +33,41 @@ const Header: React.FC<HeaderProps> = ({ zone, timeLeft, status, isHost, passwor
   const memberCount = zone?.userCount || 1;
 
   return (
-    <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-5 glass z-50">
-      <div className="flex items-center gap-3">
+    <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-4 sm:px-5 glass z-50 overflow-hidden">
+      {/* Left Section: Status & ID */}
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         <div className="relative">
           <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor()}`}></div>
           {unreadCount > 0 && (
             <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-black"></div>
           )}
         </div>
-        <div className="flex flex-col -gap-1">
-          <h1 className="font-black tracking-tighter text-sm uppercase">Locus</h1>
-          <span className="text-[7px] mono text-gray-500 uppercase tracking-widest">
-            {zone ? `ID: ${zone.id.toUpperCase()}` : 'EPHEMERAL'}
-          </span>
+        
+        <div className="flex flex-col">
+          {/* Hide brand name on mobile if we're in a room to save space */}
+          <h1 className={`font-black tracking-tighter text-sm uppercase ${zone ? 'hidden sm:block' : 'block'}`}>Locus</h1>
+          
+          <div className="flex items-center gap-2">
+            <span className="text-[7px] mono text-gray-500 uppercase tracking-widest whitespace-nowrap">
+              {zone ? `ID: ${zone.id.toUpperCase()}` : 'EPHEMERAL'}
+            </span>
+            
+            {/* Mobile-only Member Badge: integrated into left group */}
+            {zone && (
+              <div className="sm:hidden flex items-center gap-1.5 bg-white/5 border border-white/10 px-2 py-0.5 rounded-full">
+                <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-[8px] font-black text-white/60 mono leading-none">
+                  {memberCount}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
+      {/* Desktop-only Center Badge: Absolutely centered for aesthetics */}
       {zone && (
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
+        <div className="hidden sm:flex absolute left-1/2 -translate-x-1/2 items-center gap-2">
           <div className="bg-white/5 border border-white/10 px-3 py-1 rounded-full flex items-center gap-2 shadow-inner">
             <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse"></div>
             <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/60 mono">
@@ -60,36 +77,41 @@ const Header: React.FC<HeaderProps> = ({ zone, timeLeft, status, isHost, passwor
         </div>
       )}
 
+      {/* Right Section: Time & Actions */}
       {zone ? (
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+          {/* Room Access Key (For Host Only) */}
           {isHost && zone.type === 'private' && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-white/[0.03] px-2 py-1 rounded-lg border border-white/5">
+              <svg className="w-3 h-3 text-white/20" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clipRule="evenodd" />
+              </svg>
               <button 
                 onClick={() => setShowPwd(!showPwd)}
-                className="mono text-[10px] font-bold text-white/40 hover:text-white transition-colors"
+                className="mono text-[10px] font-bold text-white/60 hover:text-white transition-colors"
               >
                 {showPwd ? password : '••••'}
               </button>
             </div>
           )}
 
-          <div className="flex flex-col items-end">
+          <div className="flex flex-col items-end min-w-[40px]">
              <span className={`mono text-[11px] font-bold ${timeLeft < 300000 ? 'text-red-500 animate-pulse' : 'text-green-500'}`}>
                {formatTime(timeLeft)}
              </span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 sm:gap-1">
             <button 
               onClick={onShare}
-              className="p-2 text-white/40 hover:text-white transition-colors"
+              className="p-1.5 sm:p-2 text-white/40 hover:text-white transition-colors"
               title="Share Zone"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6a3 3 0 100-2.684m0 2.684l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
               </svg>
             </button>
-            <button onClick={onExitRequest} className="p-2 text-gray-500 hover:text-white transition-colors">
+            <button onClick={onExitRequest} className="p-1.5 sm:p-2 text-gray-500 hover:text-white transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17 16l4-4m0 0l-4-4m4 4H7" /></svg>
             </button>
           </div>
