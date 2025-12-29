@@ -10,23 +10,22 @@ interface JoinScreenProps {
   rooms: Zone[];
   deepLinkedZone?: Zone | null;
   isLoading?: boolean;
-  defaultHandle?: string;
 }
 
-const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLinkedZone, isLoading = false, defaultHandle = '' }) => {
+const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLinkedZone, isLoading = false }) => {
   const [advice, setAdvice] = useState<string>("Initializing secure discovery...");
   const [view, setView] = useState<'browse' | 'create'>('browse');
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
   
   // Create Flow state
-  const [newUsername, setNewUsername] = useState(defaultHandle);
+  const [newUsername, setNewUsername] = useState('');
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<RoomType>('public');
   const [newPass, setNewPass] = useState('');
 
   // Join Flow state
   const [selectedRoom, setSelectedRoom] = useState<Zone | null>(null);
-  const [joinUsername, setJoinUsername] = useState(defaultHandle);
+  const [joinUsername, setJoinUsername] = useState('');
   const [joinPass, setJoinPass] = useState('');
 
   useEffect(() => {
@@ -236,7 +235,7 @@ const JoinScreen: React.FC<JoinScreenProps> = ({ onJoin, onCreate, rooms, deepLi
                   Verify & Enter
                 </button>
                 <button 
-                  onClick={() => { if(!isLoading) { setSelectedRoom(null); setJoinUsername(defaultHandle); setJoinPass(''); } }} 
+                  onClick={() => { if(!isLoading) { setSelectedRoom(null); setJoinUsername(''); setJoinPass(''); } }} 
                   disabled={isLoading}
                   className="w-full py-4 bg-white/5 text-gray-500 font-black uppercase tracking-widest text-[10px] rounded-xl hover:bg-white/10 transition-all disabled:opacity-50"
                 >

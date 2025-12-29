@@ -18,8 +18,6 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
-// Pre-generate a default handle for instant joining
-const DEFAULT_HANDLE = `NODE_${FINGERPRINT.slice(0, 4).toUpperCase()}`;
 
 const TYPING_EXPIRY_MS = 4000;
 const PRESENCE_HEARTBEAT_MS = 10000; 
@@ -92,8 +90,6 @@ const App: React.FC = () => {
     const zType = params.get('t') as RoomType;
 
     if (zId && zName && zType) {
-      // Hydrate a virtual zone so we can show the join screen instantly 
-      // without waiting for the first MQTT discovery pulse
       setPendingZone({
         id: zId,
         name: decodeURIComponent(zName),
@@ -124,7 +120,7 @@ const App: React.FC = () => {
       });
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => interval && clearInterval(interval);
   }, [state.currentZone?.id]);
 
   useEffect(() => {
@@ -161,17 +157,20 @@ const App: React.FC = () => {
       });
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => interval && clearInterval(interval);
   }, [userLocation]);
 
   useEffect(() => {
+    // Public broker configuration optimization for browser WebSockets
     const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
-      clientId: 'locus_' + FINGERPRINT,
+      clientId: 'loc_' + FINGERPRINT, // Slightly shorter clientId
       clean: true,
-      connectTimeout: 30000, 
-      reconnectPeriod: 1000, 
-      keepalive: 60,
-      reschedulePings: true, 
+      connectTimeout: 10000, // Reduced from 30s to 10s to trigger retries faster
+      reconnectPeriod: 2000, // 2s between reconnection attempts
+      keepalive: 30, // Shorter keepalive for public brokers
+      reschedulePings: true,
+      protocolVersion: 4, // Explicitly use MQTT 3.1.1 for maximum public broker compatibility
+      path: '/mqtt' // Explicitly set path for some broker configurations
     });
 
     client.on('connect', () => {
@@ -185,12 +184,19 @@ const App: React.FC = () => {
       }
     });
 
-    client.on('reconnect', () => setConnectionStatus('reconnecting'));
-    client.on('offline', () => setConnectionStatus('offline'));
+    client.on('reconnect', () => {
+      setConnectionStatus('reconnecting');
+    });
+
+    client.on('offline', () => {
+      setConnectionStatus('offline');
+    });
+
     client.on('error', (err: any) => {
-      console.error("MQTT Error:", err.message);
-      if (err.message && (err.message.includes('timeout') || err.message.includes('Keepalive'))) {
-        setConnectionStatus('reconnecting');
+      console.error("MQTT Error Details:", err);
+      // specific handling for connack timeout to force a state refresh if needed
+      if (err.message && err.message.includes('timeout')) {
+        setConnectionStatus('offline');
       }
     });
 
@@ -208,7 +214,11 @@ const App: React.FC = () => {
     });
 
     mqttClientRef.current = client;
-    return () => client.end();
+    return () => {
+      if (client) {
+        client.end(true);
+      }
+    };
   }, [state.currentZone?.id]);
 
   const handleDiscoveryPulse = (room: Zone) => {
@@ -237,7 +247,8 @@ const App: React.FC = () => {
   };
 
   const handleRoomEvent = (data: any) => {
-    const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone?.id}`;
+    if (!stateRef.current.currentZone) return;
+    const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
     
     switch (data.type) {
       case 'message':
@@ -327,6 +338,7 @@ const App: React.FC = () => {
   };
 
   const createRoom = async (name: string, type: RoomType, username: string, password?: string) => {
+    if (!username.trim()) return alert("Identity handle required.");
     setLoading({ active: true, message: "INITIALIZING SENSORS", subMessage: "Requesting geolocation lock..." });
     try {
       const pos = await getCurrentPosition();
@@ -351,6 +363,7 @@ const App: React.FC = () => {
   };
 
   const joinRoom = async (zone: Zone, username: string, password?: string) => {
+    if (!username.trim()) return alert("Identity handle required.");
     setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying proximity and credentials..." });
     
     if (zone.type === 'private' && zone.passwordHash) {
@@ -368,7 +381,7 @@ const App: React.FC = () => {
 
   const enterZone = (zone: Zone, username: string, isHost: boolean) => {
     const newUser: User = {
-      username: (username || DEFAULT_HANDLE).toUpperCase(),
+      username: username.toUpperCase(),
       color: COLORS[Math.floor(Math.random() * COLORS.length)]
     };
     setState(prev => ({
@@ -377,7 +390,7 @@ const App: React.FC = () => {
     }));
     setUnreadCount(0);
     setPendingZone(null);
-    if (mqttClientRef.current) {
+    if (mqttClientRef.current && mqttClientRef.current.connected) {
        const roomTopic = `locuschat/v2/rooms/${zone.id}`;
        mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
        mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
@@ -404,7 +417,6 @@ const App: React.FC = () => {
 
   const handleShare = async () => {
     if (state.currentZone) {
-      // Append name and type metadata so the receiver hydrates instantly
       const shareUrl = `${window.location.origin}${window.location.pathname}?zoneId=${state.currentZone.id}&n=${encodeURIComponent(state.currentZone.name)}&t=${state.currentZone.type}`;
       if (navigator.share) {
         try {
@@ -460,7 +472,6 @@ const App: React.FC = () => {
             <JoinScreen 
               onJoin={joinRoom} onCreate={createRoom} rooms={state.availableRooms}
               deepLinkedZone={pendingZone} isLoading={loading.active}
-              defaultHandle={DEFAULT_HANDLE}
             />
             <Footer 
               status={connectionStatus} timeLeft={state.timeLeft}
