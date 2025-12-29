@@ -11,20 +11,9 @@ interface HeaderProps {
   unreadCount: number;
   onExitRequest: () => void;
   onShare: () => void;
-  onBrandClick: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ 
-  zone, 
-  timeLeft, 
-  status, 
-  isHost, 
-  password, 
-  unreadCount, 
-  onExitRequest, 
-  onShare,
-  onBrandClick
-}) => {
+const Header: React.FC<HeaderProps> = ({ zone, timeLeft, status, isHost, password, unreadCount, onExitRequest, onShare }) => {
   const [showPwd, setShowPwd] = useState(false);
 
   const formatTime = (ms: number) => {
@@ -54,13 +43,9 @@ const Header: React.FC<HeaderProps> = ({
           )}
         </div>
         
-        {/* Brand Area - Home Button */}
-        <button 
-          onClick={onBrandClick}
-          className="flex flex-col min-w-0 text-left hover:opacity-70 transition-opacity active:scale-95 group"
-        >
-          {/* Brand Identity */}
-          <h1 className="font-black tracking-tighter text-sm uppercase leading-none mb-0.5 shrink-0 group-active:text-white/60">Locus</h1>
+        <div className="flex flex-col min-w-0">
+          {/* Brand Identity - Always Visible */}
+          <h1 className="font-black tracking-tighter text-sm uppercase leading-none mb-0.5 shrink-0">Locus</h1>
           
           <div className="flex items-center gap-1.5 min-w-0">
             {/* Room Name - Always Visible with truncation safety */}
@@ -68,7 +53,7 @@ const Header: React.FC<HeaderProps> = ({
               {zone ? zone.name : 'EPHEMERAL'}
             </span>
             
-            {/* Mobile-only Member Badge */}
+            {/* Mobile-only Member Badge: integrated into left group */}
             {zone && (
               <div className="sm:hidden flex items-center gap-1 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded-full shrink-0">
                 <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse"></div>
@@ -78,10 +63,10 @@ const Header: React.FC<HeaderProps> = ({
               </div>
             )}
           </div>
-        </button>
+        </div>
       </div>
 
-      {/* Desktop-only Center Badge */}
+      {/* Desktop-only Center Badge: Absolutely centered for aesthetics */}
       {zone && (
         <div className="hidden sm:flex absolute left-1/2 -translate-x-1/2 items-center gap-2">
           <div className="bg-white/5 border border-white/10 px-3 py-1 rounded-full flex items-center gap-2 shadow-inner">
@@ -96,6 +81,7 @@ const Header: React.FC<HeaderProps> = ({
       {/* Right Section: Time & Actions */}
       {zone ? (
         <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+          {/* Room Access Key (For Host Only) */}
           {isHost && zone.type === 'private' && (
             <div className="flex items-center gap-1.5 bg-white/[0.03] px-2 py-1 rounded-lg border border-white/5 shrink-0">
               <svg className="w-3 h-3 text-white/20" fill="currentColor" viewBox="0 0 20 20">
@@ -132,12 +118,9 @@ const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
       ) : (
-        <button 
-          onClick={onBrandClick}
-          className="text-[9px] text-gray-700 font-bold mono uppercase tracking-widest text-right shrink-0 hover:text-white transition-colors"
-        >
-          {status === 'connected' ? 'SYNCED' : 'SEARCHING...'}
-        </button>
+        <div className="text-[9px] text-gray-700 font-bold mono uppercase tracking-widest text-right shrink-0">
+          SEARCHING...
+        </div>
       )}
     </header>
   );
