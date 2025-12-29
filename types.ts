@@ -1,5 +1,5 @@
 
-export type MediaType = 'text' | 'image' | 'video' | 'audio';
+export type MediaType = 'text' | 'image' | 'video' | 'audio' | 'system';
 export type RoomType = 'public' | 'private';
 
 export interface Message {
@@ -8,6 +8,7 @@ export interface Message {
   text?: string;
   timestamp: number;
   isSystem?: boolean;
+  systemType?: 'join' | 'leave';
   type: MediaType;
   mediaData?: string; 
 }

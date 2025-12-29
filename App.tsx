@@ -19,7 +19,6 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
-
 const TYPING_EXPIRY_MS = 4000;
 const PRESENCE_HEARTBEAT_MS = 10000; 
 
@@ -49,14 +48,12 @@ const App: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [pendingZone, setPendingZone] = useState<Zone | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
-  
   const [loading, setLoading] = useState<LoadingState>({ active: false, message: '' });
 
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
   const activeMembersRef = useRef<Set<string>>(new Set([FINGERPRINT]));
   const typingTimeoutRef = useRef<any>(null);
-  const appRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     stateRef.current = state;
@@ -66,19 +63,15 @@ const App: React.FC = () => {
     const updateLocation = async () => {
       try {
         const pos = await getCurrentPosition();
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        setUserLocation({ lat, lng });
-
+        setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         if (stateRef.current.currentZone) {
-          const d = calculateDistance(lat, lng, stateRef.current.currentZone.center.lat, stateRef.current.currentZone.center.lng);
+          const d = calculateDistance(pos.coords.latitude, pos.coords.longitude, stateRef.current.currentZone.center.lat, stateRef.current.currentZone.center.lng);
           setState(prev => ({ ...prev, distance: d }));
         }
       } catch (e) {
-        console.warn("Location access denied or unavailable.");
+        console.warn("Location unavailable.");
       }
     };
-
     updateLocation();
     const locInterval = setInterval(updateLocation, LOCATION_CHECK_INTERVAL_MS);
     return () => clearInterval(locInterval);
@@ -87,14 +80,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const zId = params.get('zoneId');
-    const zName = params.get('n');
-    const zType = params.get('t') as RoomType;
-
-    if (zId && zName && zType) {
+    if (zId) {
       setPendingZone({
         id: zId,
-        name: decodeURIComponent(zName),
-        type: zType,
+        name: decodeURIComponent(params.get('n') || 'UNNAMED'),
+        type: (params.get('t') as RoomType) || 'public',
         hostId: 'remote',
         center: { lat: 0, lng: 0 },
         createdAt: Date.now(),
@@ -104,162 +94,20 @@ const App: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => {
-    if (!state.currentZone) return;
-
-    const interval = setInterval(() => {
-      setState(prev => {
-        if (!prev.currentZone) return prev;
-        const remaining = prev.currentZone.expiresAt - Date.now();
-        if (remaining <= 0) {
-          clearInterval(interval);
-          alert("Session expired. This zone has been decommissioned.");
-          setTimeout(handleExit, 0);
-          return { ...prev, timeLeft: 0 };
-        }
-        return { ...prev, timeLeft: remaining };
-      });
-    }, 1000);
-
-    return () => interval && clearInterval(interval);
-  }, [state.currentZone?.id]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const currentLocation = userLocation; 
-
-      setState(prev => {
-        let changed = false;
-        const newTyping = { ...prev.typingUsers };
-        Object.keys(newTyping).forEach(username => {
-          if (now - newTyping[username] > TYPING_EXPIRY_MS) {
-            delete newTyping[username];
-            changed = true;
-          }
-        });
-
-        const filteredRooms = prev.availableRooms.filter(room => {
-          const isExpired = room.expiresAt <= now;
-          if (isExpired) return false;
-          
-          if (currentLocation) {
-            const dist = calculateDistance(currentLocation.lat, currentLocation.lng, room.center.lat, room.center.lng);
-            return dist <= RADIUS_KM;
-          }
-          return true;
-        });
-
-        if (filteredRooms.length !== prev.availableRooms.length) {
-          changed = true;
-        }
-
-        return changed ? { ...prev, typingUsers: newTyping, availableRooms: filteredRooms } : prev;
-      });
-    }, 1000);
-
-    return () => interval && clearInterval(interval);
-  }, [userLocation]);
-
-  // Host Pulse Logic encapsulated for reuse
-  const broadcastHostZone = () => {
-    if (!stateRef.current.isHost || !stateRef.current.currentZone || !mqttClientRef.current) return;
-    const currentCount = Math.max(1, activeMembersRef.current.size);
-    const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
-    const zoneData = { ...stateRef.current.currentZone, userCount: currentCount };
-    
-    mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(zoneData));
-    mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'count_sync', count: currentCount }));
-    
-    // Also update local state
-    setState(prev => prev.currentZone ? ({ ...prev, currentZone: { ...prev.currentZone, userCount: currentCount } }) : prev);
-  };
-
-  useEffect(() => {
-    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
-      clientId: 'loc_' + FINGERPRINT,
-      clean: true,
-      connectTimeout: 10000,
-      reconnectPeriod: 2000,
-      keepalive: 30,
-      reschedulePings: true,
-      protocolVersion: 4,
-      path: '/mqtt'
-    });
-
-    client.on('connect', () => {
-      setConnectionStatus('connected');
-      
-      // Listen for room updates
-      client.subscribe(DISCOVERY_TOPIC);
-      
-      // Proactive Discovery: Request all hosts to identify immediately
-      client.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
-
-      // If we are a host, we need to listen for discovery requests from new users
-      if (stateRef.current.isHost) {
-        client.subscribe(DISCOVERY_REQ_TOPIC);
-      }
-
-      if (stateRef.current.currentZone) {
-        const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
-        client.subscribe(roomTopic);
-        client.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
-        client.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
-      }
-    });
-
-    client.on('reconnect', () => setConnectionStatus('reconnecting'));
-    client.on('offline', () => setConnectionStatus('offline'));
-    client.on('error', (err: any) => {
-      console.error("MQTT Error:", err);
-      if (err.message && err.message.includes('timeout')) setConnectionStatus('offline');
-    });
-
-    client.on('message', (topic, payload) => {
-      try {
-        const data = JSON.parse(payload.toString());
-        if (topic === DISCOVERY_TOPIC) {
-          handleDiscoveryPulse(data);
-        } else if (topic === DISCOVERY_REQ_TOPIC) {
-          // If someone requests a sync and we are a host, respond immediately
-          if (stateRef.current.isHost && data.sender !== FINGERPRINT) {
-            broadcastHostZone();
-          }
-        } else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) {
-          handleRoomEvent(data);
-        }
-      } catch (e) {
-        console.error("Payload parsing error", e);
-      }
-    });
-
-    mqttClientRef.current = client;
-    return () => client && client.end(true);
-  }, [state.currentZone?.id, state.isHost]);
-
   const handleDiscoveryPulse = (room: Zone) => {
     const now = Date.now();
     if (room.expiresAt <= now) return;
-
     setState(prev => {
       const isCurrentZone = prev.currentZone?.id === room.id;
       const others = prev.availableRooms.filter(r => r.id !== room.id);
-      
       let inRange = true;
       if (userLocation) {
         const dist = calculateDistance(userLocation.lat, userLocation.lng, room.center.lat, room.center.lng);
         inRange = dist <= RADIUS_KM;
       }
-
       const updatedRooms = inRange ? [...others, room] : others;
       const updatedCurrentZone = isCurrentZone ? { ...prev.currentZone, userCount: room.userCount } : prev.currentZone;
-
-      return { 
-        ...prev, 
-        availableRooms: updatedRooms,
-        currentZone: updatedCurrentZone as Zone | null
-      };
+      return { ...prev, availableRooms: updatedRooms, currentZone: updatedCurrentZone as Zone | null };
     });
   };
 
@@ -272,76 +120,82 @@ const App: React.FC = () => {
         const msg = data.payload;
         setState(prev => {
           if (prev.messages.some(m => m.id === msg.id)) return prev;
-          const newTyping = { ...prev.typingUsers };
-          delete newTyping[msg.sender];
-          if (msg.sender !== prev.currentUser?.username) {
+          if (!msg.isSystem && msg.sender !== prev.currentUser?.username) {
             soundService.playReceive();
             setUnreadCount(c => c + 1);
           }
+          const newTyping = { ...prev.typingUsers };
+          delete newTyping[msg.sender];
           return { ...prev, messages: [...prev.messages, msg], typingUsers: newTyping };
         });
         break;
       case 'typing':
         if (data.sender === stateRef.current.currentUser?.username) return;
-        setState(prev => ({ 
-          ...prev, 
-          typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } 
-        }));
+        setState(prev => ({ ...prev, typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } }));
         break;
       case 'presence':
         if (stateRef.current.isHost) activeMembersRef.current.add(data.sender);
         break;
       case 'count_sync':
-        setState(prev => {
-          if (prev.currentZone && prev.currentZone.id === stateRef.current.currentZone?.id) {
-            return { ...prev, currentZone: { ...prev.currentZone, userCount: data.count } };
-          }
-          return prev;
-        });
+        setState(prev => prev.currentZone ? ({ ...prev, currentZone: { ...prev.currentZone, userCount: data.count } }) : prev);
         break;
       case 'history_req':
         if (stateRef.current.messages.length > 0) {
-          mqttClientRef.current.publish(roomTopic, JSON.stringify({ 
-            type: 'history_res', target: data.sender, payload: stateRef.current.messages
-          }));
+          mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'history_res', target: data.sender, payload: stateRef.current.messages }));
         }
         break;
       case 'history_res':
         if (data.target === FINGERPRINT) {
           setState(prev => {
-            const incomingMessages = data.payload as Message[];
+            const incoming = data.payload as Message[];
             const existingIds = new Set(prev.messages.map(m => m.id));
             const newMessages = [...prev.messages];
-            incomingMessages.forEach(msg => { if (!existingIds.has(msg.id)) newMessages.push(msg); });
+            incoming.forEach(m => { if (!existingIds.has(m.id)) newMessages.push(m); });
             return { ...prev, messages: newMessages.sort((a, b) => a.timestamp - b.timestamp) };
           });
         }
         break;
-      case 'room_delete':
-        alert("This Zone has been decommissioned.");
-        handleExit();
-        break;
     }
   };
 
-  // Passive pulse timer (Fallback)
   useEffect(() => {
-    if (!state.currentZone || !mqttClientRef.current || !state.isHost) return;
-    const pulse = setInterval(() => {
-      broadcastHostZone();
-      activeMembersRef.current = new Set([FINGERPRINT]);
-    }, DISCOVERY_PULSE_INTERVAL_MS);
-    return () => clearInterval(pulse);
-  }, [state.currentZone?.id, state.isHost]);
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+      clientId: 'locus_' + FINGERPRINT,
+      clean: true,
+      connectTimeout: 20000,
+      reconnectPeriod: 2000,
+      protocolVersion: 4,
+      path: '/mqtt'
+    });
 
-  useEffect(() => {
-    if (!state.currentZone || !mqttClientRef.current) return;
-    const hb = setInterval(() => {
-      const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone?.id}`;
-      mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
-    }, PRESENCE_HEARTBEAT_MS);
-    return () => clearInterval(hb);
+    client.on('connect', () => {
+      setConnectionStatus('connected');
+      client.subscribe(DISCOVERY_TOPIC);
+      client.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+      if (stateRef.current.currentZone) {
+        const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
+        client.subscribe(roomTopic);
+        client.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
+      }
+    });
+
+    client.on('message', (topic, payload) => {
+      const data = JSON.parse(payload.toString());
+      if (topic === DISCOVERY_TOPIC) handleDiscoveryPulse(data);
+      else if (topic === DISCOVERY_REQ_TOPIC && stateRef.current.isHost && data.sender !== FINGERPRINT) broadcastHostZone();
+      else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) handleRoomEvent(data);
+    });
+
+    mqttClientRef.current = client;
+    return () => client && client.end(true);
   }, [state.currentZone?.id]);
+
+  const broadcastHostZone = () => {
+    if (!stateRef.current.isHost || !stateRef.current.currentZone || !mqttClientRef.current) return;
+    const currentCount = Math.max(1, activeMembersRef.current.size);
+    mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify({ ...stateRef.current.currentZone, userCount: currentCount }));
+    mqttClientRef.current.publish(`locuschat/v2/rooms/${stateRef.current.currentZone.id}`, JSON.stringify({ type: 'count_sync', count: currentCount }));
+  };
 
   const hashPassword = async (pwd: string) => {
     const msgUint8 = new TextEncoder().encode(pwd + "locus-salt");
@@ -349,117 +203,100 @@ const App: React.FC = () => {
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
+  const refreshDiscovery = () => {
+    if (mqttClientRef.current?.connected) {
+      setLoading({ active: true, message: "REFRESHING SIGNALS", subMessage: "Broadcasting synchronization request..." });
+      mqttClientRef.current.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+      setTimeout(() => setLoading({ active: false, message: "" }), 800);
+    }
+  };
+
+  const handleBrandClick = () => {
+    if (state.currentZone) setShowExitConfirm(true);
+    else refreshDiscovery();
+  };
+
   const createRoom = async (name: string, type: RoomType, username: string, password?: string) => {
-    if (!username.trim()) return alert("Identity handle required.");
     setLoading({ active: true, message: "INITIALIZING SENSORS", subMessage: "Requesting geolocation lock..." });
     try {
       const pos = await getCurrentPosition();
-      setLoading(l => ({ ...l, message: "GENERATING SECURE TUNNEL", subMessage: "Establishing ephemeral frequency..." }));
-      
+      setLoading({ active: true, message: "GENERATING SECURE TUNNEL", subMessage: "Establishing ephemeral frequency..." });
       const now = Date.now();
-      const id = Math.random().toString(36).substr(2, 9);
-      const pwdHash = (type === 'private' && password) ? await hashPassword(password) : undefined;
       const zone: Zone = {
-        id, name: name.toUpperCase(), type, hostId: FINGERPRINT,
+        id: Math.random().toString(36).substr(2, 9),
+        name: name.toUpperCase(), type, hostId: FINGERPRINT,
         center: { lat: pos.coords.latitude, lng: pos.coords.longitude },
-        createdAt: now, expiresAt: now + SESSION_DURATION_MS, userCount: 1, passwordHash: pwdHash
+        createdAt: now, expiresAt: now + SESSION_DURATION_MS, userCount: 1,
+        passwordHash: password ? await hashPassword(password) : undefined
       };
       if (password) setRoomPassword(password);
-      activeMembersRef.current = new Set([FINGERPRINT]);
-      enterZone(zone, username, true);
+      setTimeout(() => {
+        enterZone(zone, username, true);
+        setLoading({ active: false, message: "" });
+      }, 1000);
     } catch (e) {
-      alert("Location required to initialize a Zone.");
-    } finally {
+      alert("Location required.");
       setLoading({ active: false, message: "" });
     }
   };
 
   const joinRoom = async (zone: Zone, username: string, password?: string) => {
-    if (!username.trim()) return alert("Identity handle required.");
     setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying proximity and credentials..." });
-    
     if (zone.type === 'private' && zone.passwordHash) {
-      const inputHash = await hashPassword(password || '');
-      if (inputHash !== zone.passwordHash) {
+      if (await hashPassword(password || '') !== zone.passwordHash) {
         setLoading({ active: false, message: "" });
         return alert("Access Denied.");
       }
       setRoomPassword(password || '');
     }
-    
-    enterZone(zone, username, zone.hostId === FINGERPRINT);
-    setLoading({ active: false, message: "" });
+    setTimeout(() => {
+      enterZone(zone, username, zone.hostId === FINGERPRINT);
+      setLoading({ active: false, message: "" });
+    }, 1000);
   };
 
   const enterZone = (zone: Zone, username: string, isHost: boolean) => {
-    const newUser: User = {
-      username: username.toUpperCase(),
-      color: COLORS[Math.floor(Math.random() * COLORS.length)]
-    };
-    setState(prev => ({
-      ...prev, currentZone: zone, currentUser: newUser, isHost,
-      messages: [], timeLeft: zone.expiresAt - Date.now(),
-    }));
+    const newUser: User = { username: username.toUpperCase(), color: COLORS[Math.floor(Math.random() * COLORS.length)] };
+    setState(prev => ({ ...prev, currentZone: zone, currentUser: newUser, isHost, messages: [], timeLeft: zone.expiresAt - Date.now() }));
     setUnreadCount(0);
     setPendingZone(null);
-    if (mqttClientRef.current && mqttClientRef.current.connected) {
-       const roomTopic = `locuschat/v2/rooms/${zone.id}`;
-       mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'presence', sender: FINGERPRINT }));
-       mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
+    if (mqttClientRef.current?.connected) {
+      const roomTopic = `locuschat/v2/rooms/${zone.id}`;
+      mqttClientRef.current.publish(roomTopic, JSON.stringify({ 
+        type: 'message', 
+        payload: { id: `sys_join_${Date.now()}`, sender: newUser.username, timestamp: Date.now(), isSystem: true, systemType: 'join', type: 'system' } 
+      }));
+      mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'history_req', sender: FINGERPRINT }));
     }
   };
 
   const handleExit = async () => {
+    if (mqttClientRef.current?.connected && state.currentZone && state.currentUser) {
+      const roomTopic = `locuschat/v2/rooms/${state.currentZone.id}`;
+      mqttClientRef.current.publish(roomTopic, JSON.stringify({ 
+        type: 'message', 
+        payload: { id: `sys_leave_${Date.now()}`, sender: state.currentUser.username, timestamp: Date.now(), isSystem: true, systemType: 'leave', type: 'system' } 
+      }));
+    }
     setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Scrubbing transient RAM buffers..." });
-    setState(prev => ({
-      ...prev, currentZone: null, currentUser: null, messages: [], isHost: false,
-      timeLeft: SESSION_DURATION_MS, typingUsers: {}, distance: null,
-    }));
+    setState(prev => ({ ...prev, currentZone: null, currentUser: null, messages: [], isHost: false, timeLeft: SESSION_DURATION_MS }));
     setRoomPassword('');
-    setUnreadCount(0);
-    activeMembersRef.current = new Set([FINGERPRINT]);
     setShowExitConfirm(false);
     const url = new URL(window.location.href);
     url.searchParams.delete('zoneId');
-    url.searchParams.delete('n');
-    url.searchParams.delete('t');
     window.history.replaceState({}, '', url.toString());
-    setLoading({ active: false, message: "" });
+    setTimeout(() => setLoading({ active: false, message: "" }), 800);
   };
 
-  const handleShare = async () => {
-    if (state.currentZone) {
-      const shareUrl = `${window.location.origin}${window.location.pathname}?zoneId=${state.currentZone.id}&n=${encodeURIComponent(state.currentZone.name)}&t=${state.currentZone.type}`;
-      if (navigator.share) {
-        try {
-          await navigator.share({ title: 'Locus Chat Invitation', text: `Join "${state.currentZone.name}"`, url: shareUrl });
-        } catch (err: any) {
-          if (err.name !== 'AbortError') navigator.clipboard.writeText(shareUrl).then(() => alert("Link copied."));
-        }
-      } else {
-        navigator.clipboard.writeText(shareUrl).then(() => alert("Link copied."));
-      }
-    }
-  };
-
-  const sendMessage = async (text: string, type: MediaType = 'text', mediaData?: string): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return reject();
-      const msg: Message = { id: Math.random().toString(36).substr(2, 9), sender: state.currentUser.username, text, timestamp: Date.now(), type, mediaData };
-      mqttClientRef.current.publish(`locuschat/v2/rooms/${state.currentZone.id}`, JSON.stringify({ type: 'message', payload: msg }), (err: any) => {
-        if (err) reject(err); else { soundService.playSend(); resolve(); }
-      });
-    });
-  };
-
-  const broadcastTyping = () => {
-    if (!state.currentUser || !state.currentZone || !mqttClientRef.current || typingTimeoutRef.current) return;
-    mqttClientRef.current.publish(`locuschat/v2/rooms/${state.currentZone.id}`, JSON.stringify({ type: 'typing', sender: state.currentUser.username }));
-    typingTimeoutRef.current = setTimeout(() => { typingTimeoutRef.current = null; }, 2000);
+  const sendMessage = async (text: string, type: MediaType = 'text', mediaData?: string) => {
+    if (!state.currentUser || !state.currentZone || !mqttClientRef.current) return;
+    const msg: Message = { id: Math.random().toString(36).substr(2, 9), sender: state.currentUser.username, text, timestamp: Date.now(), type, mediaData };
+    mqttClientRef.current.publish(`locuschat/v2/rooms/${state.currentZone.id}`, JSON.stringify({ type: 'message', payload: msg }));
+    soundService.playSend();
   };
 
   return (
-    <div ref={appRef} className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden">
+    <div className="fixed inset-0 w-full flex flex-col bg-[#0a0a0a] text-gray-100 overflow-hidden">
       {loading.active && (
         <div className="fixed inset-0 z-[200] bg-black flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
           <div className="max-w-xs w-full flex flex-col items-center">
@@ -475,26 +312,18 @@ const App: React.FC = () => {
       <Header 
         zone={state.currentZone} timeLeft={state.timeLeft} status={connectionStatus}
         isHost={state.isHost} password={roomPassword} unreadCount={unreadCount}
-        onExitRequest={() => setShowExitConfirm(true)} onShare={handleShare}
+        onExitRequest={() => setShowExitConfirm(true)} onShare={() => {}} 
+        onBrandClick={handleBrandClick}
       />
       
       <main className="flex-1 relative overflow-hidden flex flex-col bg-[#0a0a0a]">
         {!state.currentZone ? (
           <>
-            <JoinScreen 
-              onJoin={joinRoom} onCreate={createRoom} rooms={state.availableRooms}
-              deepLinkedZone={pendingZone} isLoading={loading.active}
-            />
-            <Footer 
-              status={connectionStatus} timeLeft={state.timeLeft}
-              totalTime={SESSION_DURATION_MS} distance={state.distance} fingerprint={FINGERPRINT}
-            />
+            <JoinScreen onJoin={joinRoom} onCreate={createRoom} rooms={state.availableRooms} deepLinkedZone={pendingZone} isLoading={loading.active} />
+            <Footer status={connectionStatus} timeLeft={state.timeLeft} totalTime={SESSION_DURATION_MS} distance={state.distance} fingerprint={FINGERPRINT} />
           </>
         ) : (
-          <ChatRoom 
-            messages={state.messages} currentUser={state.currentUser} typingUsers={state.typingUsers}
-            onSendMessage={sendMessage} onTyping={broadcastTyping} onRead={() => setUnreadCount(0)}
-          />
+          <ChatRoom messages={state.messages} currentUser={state.currentUser} typingUsers={state.typingUsers} onSendMessage={sendMessage} onTyping={() => {}} onRead={() => setUnreadCount(0)} />
         )}
       </main>
 
@@ -502,10 +331,10 @@ const App: React.FC = () => {
         <div className="absolute inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md p-6 animate-in fade-in duration-300">
            <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center">
               <h2 className="text-xl font-bold mb-3 text-white">Leave Zone?</h2>
-              <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest">Local chat buffer will be cleared.</p>
+              <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest text-center">Local chat buffer will be cleared.</p>
               <div className="flex flex-col w-full gap-3">
-                <button onClick={handleExit} disabled={loading.active} className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px] disabled:opacity-50">Exit Now</button>
-                <button onClick={() => setShowExitConfirm(false)} disabled={loading.active} className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px] disabled:opacity-50">Cancel</button>
+                <button onClick={handleExit} className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px]">Exit Now</button>
+                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px]">Cancel</button>
               </div>
            </div>
         </div>
