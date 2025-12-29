@@ -33,6 +33,7 @@ const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
     currentZone: null,
     currentUser: null,
+    // Fix: Removed 'boolean =' which was causing a syntax error as boolean is a type, not a value.
     isHost: false,
     messages: [],
     isInRange: true,
@@ -161,7 +162,6 @@ const App: React.FC = () => {
     return () => interval && clearInterval(interval);
   }, [userLocation]);
 
-  // Host Pulse Logic encapsulated for reuse
   const broadcastHostZone = () => {
     if (!stateRef.current.isHost || !stateRef.current.currentZone || !mqttClientRef.current) return;
     const currentCount = Math.max(1, activeMembersRef.current.size);
@@ -171,7 +171,6 @@ const App: React.FC = () => {
     mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(zoneData));
     mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'count_sync', count: currentCount }));
     
-    // Also update local state
     setState(prev => prev.currentZone ? ({ ...prev, currentZone: { ...prev.currentZone, userCount: currentCount } }) : prev);
   };
 
@@ -179,9 +178,9 @@ const App: React.FC = () => {
     const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
       clientId: 'loc_' + FINGERPRINT,
       clean: true,
-      connectTimeout: 10000,
-      reconnectPeriod: 2000,
-      keepalive: 30,
+      connectTimeout: 30000,
+      reconnectPeriod: 3000,
+      keepalive: 60,
       reschedulePings: true,
       protocolVersion: 4,
       path: '/mqtt'
@@ -189,14 +188,9 @@ const App: React.FC = () => {
 
     client.on('connect', () => {
       setConnectionStatus('connected');
-      
-      // Listen for room updates
       client.subscribe(DISCOVERY_TOPIC);
-      
-      // Proactive Discovery: Request all hosts to identify immediately
       client.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
 
-      // If we are a host, we need to listen for discovery requests from new users
       if (stateRef.current.isHost) {
         client.subscribe(DISCOVERY_REQ_TOPIC);
       }
@@ -213,7 +207,7 @@ const App: React.FC = () => {
     client.on('offline', () => setConnectionStatus('offline'));
     client.on('error', (err: any) => {
       console.error("MQTT Error:", err);
-      if (err.message && err.message.includes('timeout')) setConnectionStatus('offline');
+      if (err.message && (err.message.includes('timeout') || err.message.includes('connack'))) setConnectionStatus('offline');
     });
 
     client.on('message', (topic, payload) => {
@@ -222,7 +216,6 @@ const App: React.FC = () => {
         if (topic === DISCOVERY_TOPIC) {
           handleDiscoveryPulse(data);
         } else if (topic === DISCOVERY_REQ_TOPIC) {
-          // If someone requests a sync and we are a host, respond immediately
           if (stateRef.current.isHost && data.sender !== FINGERPRINT) {
             broadcastHostZone();
           }
@@ -324,7 +317,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Passive pulse timer (Fallback)
   useEffect(() => {
     if (!state.currentZone || !mqttClientRef.current || !state.isHost) return;
     const pulse = setInterval(() => {
@@ -375,7 +367,7 @@ const App: React.FC = () => {
   };
 
   const joinRoom = async (zone: Zone, username: string, password?: string) => {
-    if (!username.trim()) return alert("Identity handle required.");
+    if (!username.trim()) return alert("Please set your handle first.");
     setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying proximity and credentials..." });
     
     if (zone.type === 'private' && zone.passwordHash) {
