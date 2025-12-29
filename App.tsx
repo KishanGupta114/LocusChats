@@ -20,7 +20,6 @@ import Footer from './components/Footer';
 
 const FINGERPRINT = Math.random().toString(36).substr(2, 12);
 const TYPING_EXPIRY_MS = 4000;
-const PRESENCE_HEARTBEAT_MS = 10000; 
 
 interface LoadingState {
   active: boolean;
@@ -53,11 +52,24 @@ const App: React.FC = () => {
   const mqttClientRef = useRef<any>(null);
   const stateRef = useRef(state);
   const activeMembersRef = useRef<Set<string>>(new Set([FINGERPRINT]));
-  const typingTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // Track remaining time
+  useEffect(() => {
+    if (!state.currentZone) return;
+    const timer = setInterval(() => {
+      const remaining = stateRef.current.currentZone!.expiresAt - Date.now();
+      if (remaining <= 0) {
+        handleExit();
+      } else {
+        setState(prev => ({ ...prev, timeLeft: remaining }));
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [state.currentZone?.id]);
 
   useEffect(() => {
     const updateLocation = async () => {
@@ -75,23 +87,6 @@ const App: React.FC = () => {
     updateLocation();
     const locInterval = setInterval(updateLocation, LOCATION_CHECK_INTERVAL_MS);
     return () => clearInterval(locInterval);
-  }, []);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const zId = params.get('zoneId');
-    if (zId) {
-      setPendingZone({
-        id: zId,
-        name: decodeURIComponent(params.get('n') || 'UNNAMED'),
-        type: (params.get('t') as RoomType) || 'public',
-        hostId: 'remote',
-        center: { lat: 0, lng: 0 },
-        createdAt: Date.now(),
-        expiresAt: Date.now() + SESSION_DURATION_MS,
-        userCount: 1
-      });
-    }
   }, []);
 
   const handleDiscoveryPulse = (room: Zone) => {
@@ -128,10 +123,6 @@ const App: React.FC = () => {
           delete newTyping[msg.sender];
           return { ...prev, messages: [...prev.messages, msg], typingUsers: newTyping };
         });
-        break;
-      case 'typing':
-        if (data.sender === stateRef.current.currentUser?.username) return;
-        setState(prev => ({ ...prev, typingUsers: { ...prev.typingUsers, [data.sender]: Date.now() } }));
         break;
       case 'presence':
         if (stateRef.current.isHost) activeMembersRef.current.add(data.sender);
@@ -180,10 +171,12 @@ const App: React.FC = () => {
     });
 
     client.on('message', (topic, payload) => {
-      const data = JSON.parse(payload.toString());
-      if (topic === DISCOVERY_TOPIC) handleDiscoveryPulse(data);
-      else if (topic === DISCOVERY_REQ_TOPIC && stateRef.current.isHost && data.sender !== FINGERPRINT) broadcastHostZone();
-      else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) handleRoomEvent(data);
+      try {
+        const data = JSON.parse(payload.toString());
+        if (topic === DISCOVERY_TOPIC) handleDiscoveryPulse(data);
+        else if (topic === DISCOVERY_REQ_TOPIC && stateRef.current.isHost && data.sender !== FINGERPRINT) broadcastHostZone();
+        else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) handleRoomEvent(data);
+      } catch (e) { console.error("MQTT data error", e); }
     });
 
     mqttClientRef.current = client;
@@ -195,6 +188,7 @@ const App: React.FC = () => {
     const currentCount = Math.max(1, activeMembersRef.current.size);
     mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify({ ...stateRef.current.currentZone, userCount: currentCount }));
     mqttClientRef.current.publish(`locuschat/v2/rooms/${stateRef.current.currentZone.id}`, JSON.stringify({ type: 'count_sync', count: currentCount }));
+    activeMembersRef.current = new Set([FINGERPRINT]);
   };
 
   const hashPassword = async (pwd: string) => {
@@ -203,24 +197,49 @@ const App: React.FC = () => {
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
-  const refreshDiscovery = () => {
-    if (mqttClientRef.current?.connected) {
-      setLoading({ active: true, message: "REFRESHING SIGNALS", subMessage: "Broadcasting synchronization request..." });
-      mqttClientRef.current.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+  const handleBrandClick = () => {
+    if (state.currentZone) setShowExitConfirm(true);
+    else {
+      setLoading({ active: true, message: "REFRESHING SIGNALS", subMessage: "Scanning local broadcast spectrum..." });
+      if (mqttClientRef.current?.connected) {
+        mqttClientRef.current.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+      }
       setTimeout(() => setLoading({ active: false, message: "" }), 800);
     }
   };
 
-  const handleBrandClick = () => {
-    if (state.currentZone) setShowExitConfirm(true);
-    else refreshDiscovery();
+  const handleShare = async () => {
+    if (state.currentZone) {
+      const shareUrl = `${window.location.origin}${window.location.pathname}?zoneId=${state.currentZone.id}&n=${encodeURIComponent(state.currentZone.name)}&t=${state.currentZone.type}`;
+      if (navigator.share) {
+        try {
+          await navigator.share({ 
+            title: 'Locus Chat Invitation', 
+            text: `Join the ephemeral zone: "${state.currentZone.name}"`, 
+            url: shareUrl 
+          });
+        } catch (err: any) {
+          if (err.name !== 'AbortError') copyToClipboard(shareUrl);
+        }
+      } else {
+        copyToClipboard(shareUrl);
+      }
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      alert("Discovery link copied to clipboard.");
+    }).catch(() => {
+      alert("Failed to copy link. Please copy URL manually.");
+    });
   };
 
   const createRoom = async (name: string, type: RoomType, username: string, password?: string) => {
-    setLoading({ active: true, message: "INITIALIZING SENSORS", subMessage: "Requesting geolocation lock..." });
+    setLoading({ active: true, message: "INITIALIZING SENSORS", subMessage: "Locking geolocation coordinates..." });
     try {
       const pos = await getCurrentPosition();
-      setLoading({ active: true, message: "GENERATING SECURE TUNNEL", subMessage: "Establishing ephemeral frequency..." });
+      setLoading({ active: true, message: "GENERATING SECURE TUNNEL", subMessage: "Creating transient frequency..." });
       const now = Date.now();
       const zone: Zone = {
         id: Math.random().toString(36).substr(2, 9),
@@ -233,19 +252,19 @@ const App: React.FC = () => {
       setTimeout(() => {
         enterZone(zone, username, true);
         setLoading({ active: false, message: "" });
-      }, 1000);
+      }, 1200);
     } catch (e) {
-      alert("Location required.");
+      alert("Location access is mandatory for discovery.");
       setLoading({ active: false, message: "" });
     }
   };
 
   const joinRoom = async (zone: Zone, username: string, password?: string) => {
-    setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying proximity and credentials..." });
+    setLoading({ active: true, message: "CONNECTING TO SIGNAL", subMessage: "Verifying ephemeral signature..." });
     if (zone.type === 'private' && zone.passwordHash) {
       if (await hashPassword(password || '') !== zone.passwordHash) {
         setLoading({ active: false, message: "" });
-        return alert("Access Denied.");
+        return alert("Access Denied: Invalid Key.");
       }
       setRoomPassword(password || '');
     }
@@ -278,7 +297,7 @@ const App: React.FC = () => {
         payload: { id: `sys_leave_${Date.now()}`, sender: state.currentUser.username, timestamp: Date.now(), isSystem: true, systemType: 'leave', type: 'system' } 
       }));
     }
-    setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Scrubbing transient RAM buffers..." });
+    setLoading({ active: true, message: "COLLAPSING TUNNEL", subMessage: "Purging RAM buffer cache..." });
     setState(prev => ({ ...prev, currentZone: null, currentUser: null, messages: [], isHost: false, timeLeft: SESSION_DURATION_MS }));
     setRoomPassword('');
     setShowExitConfirm(false);
@@ -312,7 +331,7 @@ const App: React.FC = () => {
       <Header 
         zone={state.currentZone} timeLeft={state.timeLeft} status={connectionStatus}
         isHost={state.isHost} password={roomPassword} unreadCount={unreadCount}
-        onExitRequest={() => setShowExitConfirm(true)} onShare={() => {}} 
+        onExitRequest={() => setShowExitConfirm(true)} onShare={handleShare} 
         onBrandClick={handleBrandClick}
       />
       
@@ -331,10 +350,10 @@ const App: React.FC = () => {
         <div className="absolute inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md p-6 animate-in fade-in duration-300">
            <div className="max-w-xs w-full glass border border-white/10 rounded-[2.5rem] p-8 text-center flex flex-col items-center">
               <h2 className="text-xl font-bold mb-3 text-white">Leave Zone?</h2>
-              <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest text-center">Local chat buffer will be cleared.</p>
+              <p className="text-gray-400 text-[10px] leading-relaxed mb-8 mono uppercase tracking-widest text-center">Your local chat session data will be permanently purged.</p>
               <div className="flex flex-col w-full gap-3">
-                <button onClick={handleExit} className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px]">Exit Now</button>
-                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px]">Cancel</button>
+                <button onClick={handleExit} className="w-full py-4 bg-white/10 text-white font-black rounded-2xl uppercase tracking-widest text-[10px] active:scale-95 transition-transform">Exit Now</button>
+                <button onClick={() => setShowExitConfirm(false)} className="w-full py-4 bg-white text-black font-black rounded-2xl uppercase tracking-widest text-[10px] active:scale-95 transition-transform">Cancel</button>
               </div>
            </div>
         </div>
