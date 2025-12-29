@@ -8,6 +8,7 @@ export const MAX_VIDEO_DURATION_S = 60;
 export const MAX_MEDIA_SIZE_MB = 1.0; 
 
 export const DISCOVERY_TOPIC = 'locuschat/v2/discovery';
+export const DISCOVERY_REQ_TOPIC = 'locuschat/v2/discovery/req';
 
 export const ADJECTIVES = ['Silent', 'Neon', 'Echo', 'Prism', 'Ghost', 'Nova', 'Swift', 'Deep', 'Cold', 'Zenith', 'Phantom', 'Cobalt', 'Vivid', 'Amber'];
 export const NOUNS = ['Walker', 'Signal', 'Node', 'Pulse', 'Vertex', 'Spark', 'Vector', 'Orbit', 'Wave', 'Ghost', 'Rider', 'Core', 'Link', 'Flow'];

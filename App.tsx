@@ -7,6 +7,7 @@ import {
   SESSION_DURATION_MS, 
   COLORS, 
   DISCOVERY_TOPIC,
+  DISCOVERY_REQ_TOPIC,
   DISCOVERY_PULSE_INTERVAL_MS,
   LOCATION_CHECK_INTERVAL_MS
 } from './constants';
@@ -160,22 +161,46 @@ const App: React.FC = () => {
     return () => interval && clearInterval(interval);
   }, [userLocation]);
 
+  // Host Pulse Logic encapsulated for reuse
+  const broadcastHostZone = () => {
+    if (!stateRef.current.isHost || !stateRef.current.currentZone || !mqttClientRef.current) return;
+    const currentCount = Math.max(1, activeMembersRef.current.size);
+    const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
+    const zoneData = { ...stateRef.current.currentZone, userCount: currentCount };
+    
+    mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify(zoneData));
+    mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'count_sync', count: currentCount }));
+    
+    // Also update local state
+    setState(prev => prev.currentZone ? ({ ...prev, currentZone: { ...prev.currentZone, userCount: currentCount } }) : prev);
+  };
+
   useEffect(() => {
-    // Public broker configuration optimization for browser WebSockets
     const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
-      clientId: 'loc_' + FINGERPRINT, // Slightly shorter clientId
+      clientId: 'loc_' + FINGERPRINT,
       clean: true,
-      connectTimeout: 10000, // Reduced from 30s to 10s to trigger retries faster
-      reconnectPeriod: 2000, // 2s between reconnection attempts
-      keepalive: 30, // Shorter keepalive for public brokers
+      connectTimeout: 10000,
+      reconnectPeriod: 2000,
+      keepalive: 30,
       reschedulePings: true,
-      protocolVersion: 4, // Explicitly use MQTT 3.1.1 for maximum public broker compatibility
-      path: '/mqtt' // Explicitly set path for some broker configurations
+      protocolVersion: 4,
+      path: '/mqtt'
     });
 
     client.on('connect', () => {
       setConnectionStatus('connected');
+      
+      // Listen for room updates
       client.subscribe(DISCOVERY_TOPIC);
+      
+      // Proactive Discovery: Request all hosts to identify immediately
+      client.publish(DISCOVERY_REQ_TOPIC, JSON.stringify({ type: 'sync_req', sender: FINGERPRINT }));
+
+      // If we are a host, we need to listen for discovery requests from new users
+      if (stateRef.current.isHost) {
+        client.subscribe(DISCOVERY_REQ_TOPIC);
+      }
+
       if (stateRef.current.currentZone) {
         const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone.id}`;
         client.subscribe(roomTopic);
@@ -184,20 +209,11 @@ const App: React.FC = () => {
       }
     });
 
-    client.on('reconnect', () => {
-      setConnectionStatus('reconnecting');
-    });
-
-    client.on('offline', () => {
-      setConnectionStatus('offline');
-    });
-
+    client.on('reconnect', () => setConnectionStatus('reconnecting'));
+    client.on('offline', () => setConnectionStatus('offline'));
     client.on('error', (err: any) => {
-      console.error("MQTT Error Details:", err);
-      // specific handling for connack timeout to force a state refresh if needed
-      if (err.message && err.message.includes('timeout')) {
-        setConnectionStatus('offline');
-      }
+      console.error("MQTT Error:", err);
+      if (err.message && err.message.includes('timeout')) setConnectionStatus('offline');
     });
 
     client.on('message', (topic, payload) => {
@@ -205,6 +221,11 @@ const App: React.FC = () => {
         const data = JSON.parse(payload.toString());
         if (topic === DISCOVERY_TOPIC) {
           handleDiscoveryPulse(data);
+        } else if (topic === DISCOVERY_REQ_TOPIC) {
+          // If someone requests a sync and we are a host, respond immediately
+          if (stateRef.current.isHost && data.sender !== FINGERPRINT) {
+            broadcastHostZone();
+          }
         } else if (stateRef.current.currentZone && topic === `locuschat/v2/rooms/${stateRef.current.currentZone.id}`) {
           handleRoomEvent(data);
         }
@@ -214,12 +235,8 @@ const App: React.FC = () => {
     });
 
     mqttClientRef.current = client;
-    return () => {
-      if (client) {
-        client.end(true);
-      }
-    };
-  }, [state.currentZone?.id]);
+    return () => client && client.end(true);
+  }, [state.currentZone?.id, state.isHost]);
 
   const handleDiscoveryPulse = (room: Zone) => {
     const now = Date.now();
@@ -307,17 +324,12 @@ const App: React.FC = () => {
     }
   };
 
+  // Passive pulse timer (Fallback)
   useEffect(() => {
-    if (!state.currentZone || !mqttClientRef.current) return;
+    if (!state.currentZone || !mqttClientRef.current || !state.isHost) return;
     const pulse = setInterval(() => {
-      const currentCount = Math.max(1, activeMembersRef.current.size);
-      if (stateRef.current.isHost) {
-        setState(prev => prev.currentZone ? ({ ...prev, currentZone: { ...prev.currentZone, userCount: currentCount } }) : prev);
-        const roomTopic = `locuschat/v2/rooms/${stateRef.current.currentZone?.id}`;
-        mqttClientRef.current.publish(DISCOVERY_TOPIC, JSON.stringify({ ...stateRef.current.currentZone, userCount: currentCount }));
-        mqttClientRef.current.publish(roomTopic, JSON.stringify({ type: 'count_sync', count: currentCount }));
-        activeMembersRef.current = new Set([FINGERPRINT]);
-      }
+      broadcastHostZone();
+      activeMembersRef.current = new Set([FINGERPRINT]);
     }, DISCOVERY_PULSE_INTERVAL_MS);
     return () => clearInterval(pulse);
   }, [state.currentZone?.id, state.isHost]);
